@@ -588,12 +588,24 @@ class SchedulerService:
             # Create run record first so we can return it immediately
             run = self.db_client.create_run(task_id, attempt_number=1)
 
-            # Spawn execution in background thread (passing existing run_id)
-            def background_execute():
-                execute_scheduled_task(task_id, self._db_path, run_id=run.id)
+            # Spawn execution in detached subprocess (passing existing run_id)
+            # Using subprocess instead of thread because daemon threads are killed
+            # when the main process exits, preventing logs from being captured
+            import subprocess as sp
+            import sys
 
-            thread = threading.Thread(target=background_execute, daemon=True)
-            thread.start()
+            # Run the execution as a detached subprocess
+            sp.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    f"from claude_task_scheduler_cli.scheduler import execute_scheduled_task; "
+                    f"execute_scheduled_task('{task_id}', '{self._db_path}', run_id='{run.id}')",
+                ],
+                start_new_session=True,  # Detach from parent process
+                stdout=sp.DEVNULL,
+                stderr=sp.DEVNULL,
+            )
 
             # Return the run record in "running" state
             return run
