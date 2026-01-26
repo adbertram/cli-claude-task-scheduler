@@ -140,9 +140,6 @@ class NotificationService:
             extracted = prettify_output(run.output)
             result = extracted.get("result", "")
             if result:
-                # Truncate for notification
-                if len(result) > 500:
-                    result = result[:500] + "..."
                 lines.append(f"Output: {result}")
 
             # Add cost if available

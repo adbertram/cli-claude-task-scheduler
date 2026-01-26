@@ -289,11 +289,11 @@ def prettify_output(output: str) -> Dict[str, Any]:
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
-        # Not valid JSON, return as-is (truncated)
-        return {"result": output[:500] + "..." if len(output) > 500 else output}
+        # Not valid JSON, return as-is
+        return {"result": output}
 
     if not isinstance(data, list):
-        return {"result": str(data)[:500]}
+        return {"result": str(data)}
 
     extracted: Dict[str, Any] = {}
 
