@@ -27,6 +27,10 @@ class LogEventType(str, Enum):
     TASK_RETRY = "task_retry"
     COMMAND_EXECUTED = "command_executed"
     OUTPUT_CAPTURED = "output_captured"
+    # Streaming events for real-time Claude responses
+    TURN_START = "turn_start"  # New conversation turn started
+    CLAUDE_RESPONSE = "claude_response"  # Assistant message content
+    TOOL_USE = "tool_use"  # Tool invocation by Claude
 
 
 class TaskLog(CLIModel):

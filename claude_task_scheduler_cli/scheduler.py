@@ -213,7 +213,11 @@ def execute_scheduled_task(
 
 
 def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service: LoggerService) -> dict:
-    """Invoke Claude Code CLI (standalone version).
+    """Invoke Claude Code CLI with streaming output (standalone version).
+
+    Uses --output-format stream-json --include-partial-messages to capture
+    real-time streaming events from Claude, logging each response and tool
+    use as it happens.
 
     Args:
         task: The task to execute
@@ -227,7 +231,8 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         "claude",
         "--print",
         "--model", task.model,
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--include-partial-messages",
     ]
 
     # Prepend non-interactive base prompt to enforce explicit failure on user interaction
@@ -237,53 +242,160 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
     logger_service.log_command_executed(task, run, cmd, task.project_path)
 
     try:
-        result = subprocess.run(
+        # Use Popen for streaming output
+        process = subprocess.Popen(
             cmd,
-            input=full_prompt,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=task.timeout_seconds,
             cwd=task.project_path,
         )
 
-        # Log output captured (full output, no truncation)
+        # Track state for streaming
+        session_id = None
+        turn_number = 0
+        current_text_content = ""
+        all_stdout_lines = []
+        final_result = None
+
+        # Send input and close stdin
+        process.stdin.write(full_prompt)
+        process.stdin.close()
+
+        # Read stdout line by line with timeout
+        import select
+        start_time = time.time()
+
+        while True:
+            # Check timeout
+            elapsed = time.time() - start_time
+            if elapsed > task.timeout_seconds:
+                process.kill()
+                process.wait()
+                timeout_msg = f"Task execution timed out after {task.timeout_seconds} seconds"
+                return {
+                    "exit_code": -1,
+                    "error": timeout_msg,
+                    "output": timeout_msg,
+                    "stdout": "\n".join(all_stdout_lines),
+                    "stderr": None,
+                    "timed_out": True,
+                }
+
+            # Check if process has finished
+            if process.poll() is not None:
+                # Read any remaining output
+                remaining = process.stdout.read()
+                if remaining:
+                    for line in remaining.strip().split("\n"):
+                        if line.strip():
+                            all_stdout_lines.append(line)
+                break
+
+            # Use select to read with timeout (1 second intervals)
+            readable, _, _ = select.select([process.stdout], [], [], 1.0)
+            if not readable:
+                continue
+
+            line = process.stdout.readline()
+            if not line:
+                continue
+
+            line = line.strip()
+            if not line:
+                continue
+
+            all_stdout_lines.append(line)
+
+            # Parse NDJSON line
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type")
+
+            # Extract session_id from init event
+            if event_type == "system" and event.get("subtype") == "init":
+                session_id = event.get("session_id")
+
+            # Handle message_start (new turn)
+            elif event_type == "stream_event":
+                inner_event = event.get("event", {})
+                inner_type = inner_event.get("type")
+
+                if inner_type == "message_start":
+                    turn_number += 1
+                    model = inner_event.get("message", {}).get("model")
+                    logger_service.log_turn_start(task, run, turn_number, model or task.model)
+                    current_text_content = ""
+
+            # Handle complete assistant message
+            elif event_type == "assistant":
+                message = event.get("message", {})
+                content_blocks = message.get("content", [])
+
+                for block in content_blocks:
+                    block_type = block.get("type")
+
+                    if block_type == "text":
+                        text = block.get("text", "")
+                        if text:
+                            logger_service.log_claude_response(
+                                task, run, turn_number, text,
+                                model=message.get("model"),
+                            )
+
+                    elif block_type == "tool_use":
+                        tool_name = block.get("name", "unknown")
+                        tool_input = block.get("input", {})
+                        logger_service.log_tool_use(
+                            task, run, turn_number, tool_name, tool_input,
+                        )
+
+            # Handle final result
+            elif event_type == "result":
+                final_result = event
+
+        # Read any stderr
+        stderr = process.stderr.read()
+
+        # Get exit code
+        exit_code = process.returncode
+
+        # Build full stdout
+        full_stdout = "\n".join(all_stdout_lines)
+
+        # Log output captured
         logger_service.log_output_captured(
             task, run,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            exit_code=result.returncode,
+            stdout=full_stdout,
+            stderr=stderr,
+            exit_code=exit_code,
         )
 
-        # Try to parse session ID from output
-        session_id = None
-        match = re.search(r'session[_-]?id["\s:]+([a-f0-9-]+)', result.stdout, re.IGNORECASE)
-        if match:
-            session_id = match.group(1)
+        # Extract final result text
+        output_text = ""
+        if final_result:
+            output_text = final_result.get("result", "")
+            if not session_id:
+                session_id = final_result.get("session_id")
 
-        # Capture full output
-        full_output = result.stdout or result.stderr or ""
-        if not full_output:
-            full_output = "Completed with no output" if result.returncode == 0 else "Failed with no output"
+        if not output_text:
+            output_text = full_stdout or stderr or ""
+        if not output_text:
+            output_text = "Completed with no output" if exit_code == 0 else "Failed with no output"
 
         return {
-            "exit_code": result.returncode,
+            "exit_code": exit_code,
             "session_id": session_id,
-            "output": full_output,
-            "error": result.stderr if result.returncode != 0 else None,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "output": output_text,
+            "error": stderr if exit_code != 0 else None,
+            "stdout": full_stdout,
+            "stderr": stderr,
         }
 
-    except subprocess.TimeoutExpired:
-        timeout_msg = f"Task execution timed out after {task.timeout_seconds} seconds"
-        return {
-            "exit_code": -1,
-            "error": timeout_msg,
-            "output": timeout_msg,
-            "stdout": None,
-            "stderr": None,
-            "timed_out": True,
-        }
     except Exception as e:
         error_msg = str(e)
         return {

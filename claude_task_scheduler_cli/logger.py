@@ -288,3 +288,138 @@ class LoggerService:
             message=message,
             details=details,
         )
+
+    def log_turn_start(
+        self,
+        task: ScheduledTask | ScheduledTaskDetail,
+        run: TaskRun,
+        turn_number: int,
+        model: str,
+    ) -> TaskLog:
+        """Log the start of a new conversation turn.
+
+        Args:
+            task: The task being executed
+            run: The run record
+            turn_number: Sequential turn number (1-indexed)
+            model: Model being used
+
+        Returns:
+            Created TaskLog entry
+        """
+        message = f"Turn {turn_number} started (model: {model})"
+        details = json.dumps({
+            "task_id": task.id,
+            "run_id": run.id,
+            "turn_number": turn_number,
+            "model": model,
+        }, indent=2)
+
+        return self._db_client.create_log(
+            task_id=task.id,
+            run_id=run.id,
+            event_type=LogEventType.TURN_START,
+            level=LogLevel.DEBUG,
+            message=message,
+            details=details,
+        )
+
+    def log_claude_response(
+        self,
+        task: ScheduledTask | ScheduledTaskDetail,
+        run: TaskRun,
+        turn_number: int,
+        content: str,
+        model: Optional[str] = None,
+    ) -> TaskLog:
+        """Log a Claude assistant response.
+
+        Args:
+            task: The task being executed
+            run: The run record
+            turn_number: Which turn this response belongs to
+            content: The text content of the response
+            model: Optional model identifier
+
+        Returns:
+            Created TaskLog entry
+        """
+        # Create summary message (truncated for display)
+        preview = content[:100].replace("\n", " ")
+        if len(content) > 100:
+            preview += "..."
+        message = f"[Turn {turn_number}] {preview}"
+
+        details = json.dumps({
+            "task_id": task.id,
+            "run_id": run.id,
+            "turn_number": turn_number,
+            "content": content,
+            "content_length": len(content),
+            "model": model,
+        }, indent=2)
+
+        return self._db_client.create_log(
+            task_id=task.id,
+            run_id=run.id,
+            event_type=LogEventType.CLAUDE_RESPONSE,
+            level=LogLevel.INFO,
+            message=message,
+            details=details,
+        )
+
+    def log_tool_use(
+        self,
+        task: ScheduledTask | ScheduledTaskDetail,
+        run: TaskRun,
+        turn_number: int,
+        tool_name: str,
+        tool_input: dict,
+    ) -> TaskLog:
+        """Log a tool invocation by Claude.
+
+        Args:
+            task: The task being executed
+            run: The run record
+            turn_number: Which turn this tool use belongs to
+            tool_name: Name of the tool being invoked
+            tool_input: Tool input parameters
+
+        Returns:
+            Created TaskLog entry
+        """
+        # Create summary based on tool type
+        if tool_name == "Read":
+            summary = tool_input.get("file_path", "unknown file")
+        elif tool_name == "Edit":
+            summary = tool_input.get("file_path", "unknown file")
+        elif tool_name == "Write":
+            summary = tool_input.get("file_path", "unknown file")
+        elif tool_name == "Bash":
+            cmd = tool_input.get("command", "")
+            summary = cmd[:50] + "..." if len(cmd) > 50 else cmd
+        elif tool_name == "Glob":
+            summary = tool_input.get("pattern", "")
+        elif tool_name == "Grep":
+            summary = tool_input.get("pattern", "")
+        else:
+            summary = str(tool_input)[:50]
+
+        message = f"[Turn {turn_number}] Tool: {tool_name} - {summary}"
+
+        details = json.dumps({
+            "task_id": task.id,
+            "run_id": run.id,
+            "turn_number": turn_number,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        }, indent=2)
+
+        return self._db_client.create_log(
+            task_id=task.id,
+            run_id=run.id,
+            event_type=LogEventType.TOOL_USE,
+            level=LogLevel.INFO,
+            message=message,
+            details=details,
+        )
