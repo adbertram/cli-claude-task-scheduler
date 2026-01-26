@@ -17,7 +17,6 @@ claude-task-scheduler channels --help
 # Daemon commands (at root level)
 claude-task-scheduler start           # Start scheduler daemon
 claude-task-scheduler stop            # Stop scheduler daemon
-claude-task-scheduler status          # Check daemon status
 claude-task-scheduler healthcheck     # Check daemon health
 
 # Docker deployment

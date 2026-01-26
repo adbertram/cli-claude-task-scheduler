@@ -80,7 +80,12 @@ def parse_task_outcome(output: str) -> tuple[TaskOutcome, Optional[str]]:
     return TaskOutcome.UNKNOWN, None
 
 
-def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) -> Optional[TaskRun]:
+def execute_scheduled_task(
+    task_id: str,
+    db_path: str,
+    attempt_number: int = 1,
+    run_id: Optional[str] = None,
+) -> Optional[TaskRun]:
     """Module-level function for APScheduler job execution.
 
     This is a standalone function (not a method) because APScheduler's SQLAlchemyJobStore
@@ -91,6 +96,7 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
         task_id: ID of the task to execute
         db_path: Path to the SQLite database
         attempt_number: Current attempt number (for retries)
+        run_id: Optional existing run ID to continue (for async triggers)
 
     Returns:
         TaskRun record or None if task not found
@@ -104,8 +110,13 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
     if not task:
         return None
 
-    # Create run record
-    run = db_client.create_run(task_id, attempt_number)
+    # Create run record or fetch existing one
+    if run_id:
+        run = db_client.get_run(run_id)
+        if not run:
+            return None
+    else:
+        run = db_client.create_run(task_id, attempt_number)
 
     # Log task start
     logger_service.log_task_start(task, run)
@@ -555,14 +566,37 @@ class SchedulerService:
         except Exception:
             pass
 
-    def run_job_now(self, task_id: str) -> Optional[TaskRun]:
-        """Trigger a task to run immediately via the scheduler."""
+    def run_job_now(self, task_id: str, wait: bool = True) -> Optional[TaskRun]:
+        """Trigger a task to run immediately.
+
+        Args:
+            task_id: ID of the task to run
+            wait: If True, wait for completion and return final run state.
+                  If False, spawn in background and return run in "running" state.
+
+        Returns:
+            TaskRun record (final state if wait=True, running state if wait=False)
+        """
         task = self.db_client.get_task(task_id)
         if not task:
             return None
 
-        # Execute directly using the standalone function
-        return execute_scheduled_task(task_id, self._db_path)
+        if wait:
+            # Execute directly and wait for completion
+            return execute_scheduled_task(task_id, self._db_path)
+        else:
+            # Create run record first so we can return it immediately
+            run = self.db_client.create_run(task_id, attempt_number=1)
+
+            # Spawn execution in background thread (passing existing run_id)
+            def background_execute():
+                execute_scheduled_task(task_id, self._db_path, run_id=run.id)
+
+            thread = threading.Thread(target=background_execute, daemon=True)
+            thread.start()
+
+            # Return the run record in "running" state
+            return run
 
     def get_next_run_time(self, cron_expression: Optional[str]) -> Optional[datetime]:
         """Get next run time for a cron expression (local time).

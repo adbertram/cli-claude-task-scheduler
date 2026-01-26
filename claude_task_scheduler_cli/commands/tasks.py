@@ -729,9 +729,14 @@ def disable_task(
 @app.command("trigger")
 def trigger_task(
     task_id: str = typer.Argument(..., help="Task ID to trigger"),
+    wait: bool = typer.Option(False, "--wait", "-w", help="Wait for task to complete"),
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
-    """Trigger a task to run immediately."""
+    """Trigger a task to run immediately.
+
+    By default, the task runs in the background and returns immediately.
+    Use --wait to block until the task completes.
+    """
     db_client = _get_db_client()
     scheduler = _get_scheduler()
 
@@ -741,7 +746,8 @@ def trigger_task(
         raise typer.Exit(1)
 
     # Execute the task
-    run = scheduler.run_job_now(task_id)
+    run = scheduler.run_job_now(task_id, wait=wait)
+
     if not run:
         print_error("Failed to trigger task")
         raise typer.Exit(1)
@@ -755,4 +761,7 @@ def trigger_task(
     else:
         print_json(run)
 
-    print_success(f"Task '{task.name}' triggered successfully")
+    if wait:
+        print_success(f"Task '{task.name}' completed")
+    else:
+        print_success(f"Task '{task.name}' triggered (running in background)")

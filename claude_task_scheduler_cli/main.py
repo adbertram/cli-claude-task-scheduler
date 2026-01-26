@@ -21,7 +21,6 @@ app.add_typer(notification_channels.app, name="channels", help="Manage notificat
 # Register daemon commands directly on root (not as subgroup)
 app.command("start", help="Start the scheduler daemon")(daemon.start)
 app.command("stop", help="Stop the scheduler daemon")(daemon.stop)
-app.command("status", help="Check scheduler daemon status")(daemon.status)
 app.command("healthcheck", help="Check if the scheduler daemon is running and healthy")(daemon.healthcheck)
 
 

@@ -11,9 +11,7 @@ from pathlib import Path
 
 import typer
 
-from ..db_client import DatabaseClient
 from ..health import check_daemon_health, get_pid_file_path
-from ..models.task import DaemonStatus
 from ..output import print_error, print_info, print_json, print_success, print_table
 from ..scheduler import SchedulerService
 
@@ -139,61 +137,6 @@ def start(
             pid_file.unlink()
         if not background:
             print_success("Scheduler stopped")
-
-
-def status(
-    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
-):
-    """Check scheduler daemon status.
-
-    Note: This only shows static information since the daemon
-    runs in a separate process. For live status, check the
-    daemon's output directly.
-    """
-    db_client = DatabaseClient()
-    scheduler = SchedulerService()
-
-    # Get task counts
-    all_tasks = db_client.list_tasks()
-    enabled_tasks = [t for t in all_tasks if t.enabled]
-
-    # Build next runs list
-    next_runs = []
-    for task in enabled_tasks[:10]:
-        next_run = scheduler.get_next_run_time(task.cron_expression)
-        if next_run:
-            next_runs.append({
-                "task_id": task.id,
-                "task_name": task.name,
-                "next_run_at": next_run.isoformat(),
-            })
-
-    status = DaemonStatus(
-        running=False,  # Can't detect from separate process
-        job_count=len(enabled_tasks),
-        uptime_seconds=None,
-        next_runs=next_runs,
-    )
-
-    if table:
-        # Print summary
-        print_table(
-            [{"total_tasks": len(all_tasks), "enabled_tasks": len(enabled_tasks)}],
-            ["total_tasks", "enabled_tasks"],
-            ["Total Tasks", "Enabled Tasks"],
-        )
-        # Print next runs
-        if next_runs:
-            print_info("\nNext scheduled runs:")
-            print_table(
-                next_runs,
-                ["task_name", "next_run_at"],
-                ["Task", "Next Run"],
-            )
-    else:
-        print_json(status)
-
-    print_info("\nNote: Run 'daemon start' to start the scheduler")
 
 
 def healthcheck(

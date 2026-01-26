@@ -113,14 +113,14 @@ Control the scheduler daemon.
 
 ```bash
 # Start the daemon (foreground)
-claude-task-scheduler daemon start
+claude-task-scheduler start
 
-# Check status
-claude-task-scheduler daemon status
-claude-task-scheduler daemon status --table
+# Check health
+claude-task-scheduler healthcheck
+claude-task-scheduler healthcheck --table
 
-# Stop info
-claude-task-scheduler daemon stop
+# Stop the daemon
+claude-task-scheduler stop
 ```
 
 ## Schedule Formats
