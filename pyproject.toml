@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-task-scheduler-cli"
+version = "0.1.0"
+description = "CLI interface for ClaudeTaskScheduler API"
+requires-python = ">=3.9"
+dependencies = [
+    "typer[all]>=0.9.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+claude-task-scheduler = "claude_task_scheduler_cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["claude_task_scheduler_cli*"]
