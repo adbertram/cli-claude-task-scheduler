@@ -171,15 +171,22 @@ def print_table(
 
 
 def _serialize_for_json(obj: Any) -> Any:
-    """Recursively serialize objects for JSON output, handling Pydantic models."""
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
+    """Recursively serialize objects for JSON output, handling Pydantic models.
+
+    Converts UTC datetimes to local time for human-readable output.
+    """
+    if isinstance(obj, datetime):
+        # Convert UTC to local time
+        local_dt = _utc_to_local(obj)
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+    elif isinstance(obj, BaseModel):
+        return _serialize_for_json(obj.model_dump())
     elif hasattr(obj, 'model_dump'):
         # Pydantic v2 model not caught by isinstance
-        return obj.model_dump()
+        return _serialize_for_json(obj.model_dump())
     elif hasattr(obj, 'dict') and not isinstance(obj, dict):
         # Pydantic v1 model
-        return obj.dict()
+        return _serialize_for_json(obj.dict())
     elif isinstance(obj, list):
         return [_serialize_for_json(item) for item in obj]
     elif isinstance(obj, dict):
@@ -257,3 +264,115 @@ def handle_error(error: Exception) -> int:
         return 1
     print_error(str(error))
     return 1
+
+
+def prettify_run_output(output: str) -> Dict[str, Any]:
+    """Extract meaningful information from Claude Code's JSON output.
+
+    Claude Code outputs a JSON array with:
+    - system init object (tools, model, etc.)
+    - assistant message(s)
+    - result object (final result, cost, duration)
+
+    This function extracts the most useful parts for display.
+
+    Args:
+        output: Raw JSON string from Claude Code's --output-format json
+
+    Returns:
+        Dictionary with extracted fields: result, model, duration_ms,
+        cost_usd, num_turns, input_tokens, output_tokens
+    """
+    if not output:
+        return {"result": None, "error": "No output"}
+
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        # Not valid JSON, return as-is (truncated)
+        return {"result": output[:500] + "..." if len(output) > 500 else output}
+
+    if not isinstance(data, list):
+        return {"result": str(data)[:500]}
+
+    extracted: Dict[str, Any] = {}
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = item.get("type")
+
+        # Extract model from system init
+        if item_type == "system" and item.get("subtype") == "init":
+            extracted["model"] = item.get("model")
+
+        # Extract final result
+        if item_type == "result":
+            extracted["result"] = item.get("result")
+            extracted["duration_ms"] = item.get("duration_ms")
+            extracted["num_turns"] = item.get("num_turns")
+            extracted["cost_usd"] = item.get("total_cost_usd")
+            extracted["is_error"] = item.get("is_error", False)
+
+            # Extract token usage
+            usage = item.get("usage", {})
+            if usage:
+                extracted["input_tokens"] = usage.get("input_tokens", 0)
+                extracted["output_tokens"] = usage.get("output_tokens", 0)
+                extracted["cache_read_tokens"] = usage.get("cache_read_input_tokens", 0)
+                extracted["cache_creation_tokens"] = usage.get("cache_creation_input_tokens", 0)
+
+    return extracted
+
+
+def prettify_run(run: Union[Dict, Any]) -> Dict[str, Any]:
+    """Prettify a task run by parsing and extracting meaningful output.
+
+    Args:
+        run: A TaskRun model or dict with an 'output' field
+
+    Returns:
+        Dictionary with run fields plus extracted output information
+    """
+    if hasattr(run, 'model_dump'):
+        run_dict = run.model_dump(mode="json")
+    elif isinstance(run, dict):
+        run_dict = run.copy()
+    else:
+        return {"error": "Invalid run object"}
+
+    # Parse the output field
+    raw_output = run_dict.get("output", "")
+    extracted = prettify_run_output(raw_output)
+
+    # Replace verbose output with extracted result
+    run_dict["output"] = extracted.get("result")
+
+    # Add extracted metadata
+    if "cost_usd" in extracted:
+        run_dict["cost_usd"] = extracted["cost_usd"]
+    if "duration_ms" in extracted:
+        run_dict["duration_ms"] = extracted["duration_ms"]
+    if "num_turns" in extracted:
+        run_dict["num_turns"] = extracted["num_turns"]
+    if "input_tokens" in extracted:
+        run_dict["input_tokens"] = extracted["input_tokens"]
+    if "output_tokens" in extracted:
+        run_dict["output_tokens"] = extracted["output_tokens"]
+    if extracted.get("is_error"):
+        run_dict["output_is_error"] = True
+
+    return run_dict
+
+
+def prettify_runs(runs: List[Union[Dict, Any]]) -> List[Dict[str, Any]]:
+    """Prettify a list of task runs.
+
+    Args:
+        runs: List of TaskRun models or dicts
+
+    Returns:
+        List of prettified run dictionaries
+    """
+    return [prettify_run(run) for run in runs]

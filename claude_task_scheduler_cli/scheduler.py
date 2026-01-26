@@ -25,6 +25,11 @@ from .logger import LoggerService
 from .models.task import ScheduledTask, TaskRun, RunStatus
 from .notifications import NotificationService
 
+# Base prompt prepended to all scheduled tasks to enforce non-interactive behavior
+NON_INTERACTIVE_BASE_PROMPT = """You are in a non-interactive environment. If you are requested to perform any user-interactive task or if you need feedback in any way from the user, you must stop immediately and report it.
+
+"""
+
 
 def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) -> Optional[TaskRun]:
     """Module-level function for APScheduler job execution.
@@ -76,14 +81,14 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             session_id=result.get("session_id"),
             exit_code=result["exit_code"],
             error_message=result.get("error"),
-            summary=result.get("summary"),
+            output=result.get("output"),
             completed_at=datetime.utcnow(),
         )
         # Update local run object for logging/notifications
         run.status = status
         run.exit_code = result["exit_code"]
         run.error_message = result.get("error")
-        run.summary = result.get("summary")
+        run.output = result.get("output")
 
         # Log completion or failure
         if status == RunStatus.SUCCESS:
@@ -116,12 +121,12 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             run.id,
             status=RunStatus.FAILURE,
             error_message=str(e),
-            summary=str(e)[:500],
+            output=str(e),
             completed_at=datetime.utcnow(),
         )
         # Update local run object for logging/notifications
         run.status = RunStatus.FAILURE
-        run.summary = str(e)[:500]
+        run.output = str(e)[:500]
         run.error_message = str(e)
 
         # Log failure
@@ -146,7 +151,7 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         logger_service: Logger service for output capture
 
     Returns:
-        Dict with exit_code, session_id, summary, error, stdout, stderr
+        Dict with exit_code, session_id, output, error, stdout, stderr
     """
     cmd = [
         "claude",
@@ -155,13 +160,16 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         "--output-format", "json",
     ]
 
+    # Prepend non-interactive base prompt to enforce explicit failure on user interaction
+    full_prompt = NON_INTERACTIVE_BASE_PROMPT + task.prompt
+
     # Log command execution
     logger_service.log_command_executed(task, run, cmd, task.project_path)
 
     try:
         result = subprocess.run(
             cmd,
-            input=task.prompt,
+            input=full_prompt,
             capture_output=True,
             text=True,
             timeout=task.timeout_seconds,
@@ -182,28 +190,26 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         if match:
             session_id = match.group(1)
 
-        # Generate summary from output (first 500 chars)
-        output = result.stdout or result.stderr or ""
-        if not output:
-            summary = "Completed with no output" if result.returncode == 0 else "Failed with no output"
-        else:
-            summary = output[:500] + ("..." if len(output) > 500 else "")
+        # Capture full output
+        full_output = result.stdout or result.stderr or ""
+        if not full_output:
+            full_output = "Completed with no output" if result.returncode == 0 else "Failed with no output"
 
         return {
             "exit_code": result.returncode,
             "session_id": session_id,
-            "summary": summary,
+            "output": full_output,
             "error": result.stderr if result.returncode != 0 else None,
             "stdout": result.stdout,
             "stderr": result.stderr,
         }
 
     except subprocess.TimeoutExpired:
-        summary = f"Task execution timed out after {task.timeout_seconds} seconds"
+        timeout_msg = f"Task execution timed out after {task.timeout_seconds} seconds"
         return {
             "exit_code": -1,
-            "error": summary,
-            "summary": summary,
+            "error": timeout_msg,
+            "output": timeout_msg,
             "stdout": None,
             "stderr": None,
             "timed_out": True,
@@ -213,7 +219,7 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         return {
             "exit_code": -1,
             "error": error_msg,
-            "summary": error_msg[:500],
+            "output": error_msg,
             "stdout": None,
             "stderr": None,
             "timed_out": False,

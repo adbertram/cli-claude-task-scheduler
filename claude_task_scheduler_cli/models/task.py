@@ -187,7 +187,7 @@ class TaskRun(CLIModel):
     session_id: Optional[str] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
-    summary: str
+    output: str
     attempt_number: int = 1
 
 

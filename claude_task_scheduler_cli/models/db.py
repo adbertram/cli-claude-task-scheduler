@@ -98,7 +98,7 @@ class TaskRunDB(Base):
     session_id = Column(String, nullable=True)
     exit_code = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
-    summary = Column(Text, nullable=False)
+    output = Column(Text, nullable=False)
     attempt_number = Column(Integer, default=1)
 
     # Relationships

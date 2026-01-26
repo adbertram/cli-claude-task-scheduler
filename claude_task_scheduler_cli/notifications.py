@@ -92,13 +92,13 @@ class NotificationService:
 
     def _format_success_message(self, task: ScheduledTask, run: TaskRun) -> str:
         """Format success notification message."""
-        summary = run.summary or "Completed successfully"
+        output = run.output or "Completed successfully"
         return (
             f"Task: {task.name}\n"
             f"Status: Completed\n"
             f"Run ID: {run.id}\n"
             f"Session ID: {run.session_id or 'N/A'}\n"
-            f"Summary: {summary}"
+            f"Output: {output}"
         )
 
     def _format_error_message(self, task: ScheduledTask, run: TaskRun) -> str:

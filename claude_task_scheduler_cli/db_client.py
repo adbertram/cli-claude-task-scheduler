@@ -294,7 +294,7 @@ class DatabaseClient:
                 status=RunStatus.RUNNING.value,
                 started_at=now,
                 attempt_number=attempt_number,
-                summary="Task execution in progress...",
+                output="Task execution in progress...",
             )
             session.add(run_db)
             session.commit()
@@ -343,7 +343,7 @@ class DatabaseClient:
         session_id: Optional[str] = None,
         exit_code: Optional[int] = None,
         error_message: Optional[str] = None,
-        summary: Optional[str] = None,
+        output: Optional[str] = None,
         completed_at: Optional[datetime] = None,
     ) -> Optional[TaskRun]:
         """Update a run."""
@@ -361,8 +361,8 @@ class DatabaseClient:
                 run_db.exit_code = exit_code
             if error_message is not None:
                 run_db.error_message = error_message
-            if summary is not None:
-                run_db.summary = summary
+            if output is not None:
+                run_db.output = output
             if completed_at is not None:
                 run_db.completed_at = completed_at
 
@@ -465,7 +465,7 @@ class DatabaseClient:
             session_id=run_db.session_id,
             exit_code=run_db.exit_code,
             error_message=run_db.error_message,
-            summary=run_db.summary,
+            output=run_db.output,
             attempt_number=run_db.attempt_number,
         )
 
@@ -484,7 +484,7 @@ class DatabaseClient:
             session_id=run_db.session_id,
             exit_code=run_db.exit_code,
             error_message=run_db.error_message,
-            summary=run_db.summary,
+            output=run_db.output,
             attempt_number=run_db.attempt_number,
             task_name=task_db.name if task_db else None,
         )

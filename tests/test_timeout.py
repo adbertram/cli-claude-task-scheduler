@@ -453,7 +453,7 @@ def test_scheduler_uses_task_timeout():
         task_id="test-id",
         status=RunStatus.RUNNING,
         started_at=datetime.utcnow(),
-        summary="Test run in progress",
+        output="Test run in progress",
     )
     logger_service = MagicMock()
 
@@ -495,7 +495,7 @@ def test_scheduler_timeout_error_message():
         task_id="test-id",
         status=RunStatus.RUNNING,
         started_at=datetime.utcnow(),
-        summary="Test run in progress",
+        output="Test run in progress",
     )
     logger_service = MagicMock()
 
@@ -974,8 +974,8 @@ class TestTimeoutE2E:
 
                 # The run should have failed with timeout error
                 latest_run = runs[0]
-                assert latest_run.status.value == "timeout", f"Expected timeout status, got {latest_run.status.value}. Summary: {latest_run.summary}"
-                assert latest_run.error_message is not None, f"No error message. Summary: {latest_run.summary}"
+                assert latest_run.status.value == "timeout", f"Expected timeout status, got {latest_run.status.value}. Summary: {latest_run.output}"
+                assert latest_run.error_message is not None, f"No error message. Summary: {latest_run.output}"
                 assert "timed out" in latest_run.error_message.lower() or "timeout" in latest_run.error_message.lower(), \
                     f"Error message doesn't mention timeout: {latest_run.error_message}"
                 assert "60" in latest_run.error_message, f"Error message doesn't mention 60 seconds: {latest_run.error_message}"
