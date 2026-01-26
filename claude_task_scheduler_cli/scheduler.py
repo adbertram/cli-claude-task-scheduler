@@ -162,16 +162,8 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
                 stderr=result.get("stderr"),
             )
 
-        # Send notification based on both process status and semantic outcome
-        # A task that ran successfully (exit_code=0) but failed semantically should
-        # still trigger an error notification
-        if status == RunStatus.SUCCESS:
-            if task_outcome == TaskOutcome.FAILED:
-                notification_service.notify_error(task, run)  # Task failed semantically
-            else:
-                notification_service.notify_success(task, run)
-        else:
-            notification_service.notify_error(task, run)
+        # Send end notification (handles both success and failure)
+        notification_service.notify_end(task, run)
 
         # Handle retry on failure or timeout
         if status in (RunStatus.FAILURE, RunStatus.TIMEOUT) and attempt_number < task.max_retries:
@@ -198,14 +190,15 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
         # Log failure
         logger_service.log_task_failed(task, run, error=str(e))
 
-        # Send error notification
-        notification_service.notify_error(task, run)
+        # Send end notification (handles failure case)
+        notification_service.notify_end(task, run)
 
         # Handle retry
         if attempt_number < task.max_retries:
             _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
 
-    return run
+    # Return prettified run from database
+    return db_client.get_run(run.id)
 
 
 def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service: LoggerService) -> dict:

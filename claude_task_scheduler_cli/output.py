@@ -266,7 +266,7 @@ def handle_error(error: Exception) -> int:
     return 1
 
 
-def prettify_run_output(output: str) -> Dict[str, Any]:
+def prettify_output(output: str) -> Dict[str, Any]:
     """Extract meaningful information from Claude Code's JSON output.
 
     Claude Code outputs a JSON array with:
@@ -344,7 +344,7 @@ def prettify_run(run: Union[Dict, Any]) -> Dict[str, Any]:
 
     # Parse the output field
     raw_output = run_dict.get("output", "")
-    extracted = prettify_run_output(raw_output)
+    extracted = prettify_output(raw_output)
 
     # Replace verbose output with extracted result
     run_dict["output"] = extracted.get("result")

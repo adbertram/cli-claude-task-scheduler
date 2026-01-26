@@ -5,6 +5,7 @@ import sys
 from typing import Optional
 
 from .db_client import DatabaseClient
+from .output import prettify_output
 from .models.notification import (
     GmailNotificationChannel,
     MacosNotificationChannel,
@@ -13,9 +14,11 @@ from .models.notification import (
 )
 from .models.task import (
     NotificationConfig,
-    NotificationEvent,
+    NotifyOn,
+    RunStatus,
     ScheduledTask,
     ScheduledTaskDetail,
+    TaskOutcome,
     TaskRun,
 )
 
@@ -39,39 +42,53 @@ class NotificationService:
             run: The task run record
         """
         config = self._get_config(task)
-        if not config or NotificationEvent.RUNNING not in config.events:
+        if not config or NotifyOn.TASK_START not in config.notify_on:
             return
 
         message = self._format_start_message(task, run)
         self._send(config, f"Task Started: {task.name}", message)
 
-    def notify_success(self, task: ScheduledTask | ScheduledTaskDetail, run: TaskRun) -> None:
-        """Send notification when task completes successfully.
+    def notify_end(self, task: ScheduledTask | ScheduledTaskDetail, run: TaskRun) -> None:
+        """Send notification when task ends.
+
+        Checks for TASK_END on success, TASK_ERROR on failure.
+        A task that ran successfully (exit_code=0) but failed semantically
+        (task_outcome=FAILED) is treated as a failure for notification purposes.
 
         Args:
             task: The scheduled task
             run: The task run record
         """
         config = self._get_config(task)
-        if not config or NotificationEvent.SUCCESS not in config.events:
+        if not config:
             return
 
-        message = self._format_success_message(task, run)
-        self._send(config, f"Task Completed: {task.name}", message)
+        # Determine if this is a success or failure
+        is_failure = (
+            run.status != RunStatus.SUCCESS or
+            run.task_outcome == TaskOutcome.FAILED
+        )
 
-    def notify_error(self, task: ScheduledTask | ScheduledTaskDetail, run: TaskRun) -> None:
-        """Send notification when task fails.
+        # Check if we should send notification based on notify_on config
+        if is_failure:
+            if NotifyOn.TASK_ERROR not in config.notify_on:
+                return
+        else:
+            if NotifyOn.TASK_END not in config.notify_on:
+                return
 
-        Args:
-            task: The scheduled task
-            run: The task run record
-        """
-        config = self._get_config(task)
-        if not config or NotificationEvent.FAILURE not in config.events:
-            return
+        message = self._format_end_message(task, run)
 
-        message = self._format_error_message(task, run)
-        self._send(config, f"Task Failed: {task.name}", message)
+        # Determine subject based on status
+        if run.status == RunStatus.SUCCESS:
+            if run.task_outcome == TaskOutcome.FAILED:
+                subject = f"Task Failed (Semantic): {task.name}"
+            else:
+                subject = f"Task Completed: {task.name}"
+        else:
+            subject = f"Task Failed: {task.name}"
+
+        self._send(config, subject, message)
 
     def _get_config(self, task: ScheduledTask | ScheduledTaskDetail) -> Optional[NotificationConfig]:
         """Get notification config for a task."""
@@ -90,27 +107,49 @@ class NotificationService:
             f"Attempt: {run.attempt_number}"
         )
 
-    def _format_success_message(self, task: ScheduledTask, run: TaskRun) -> str:
-        """Format success notification message."""
-        output = run.output or "Completed successfully"
-        return (
-            f"Task: {task.name}\n"
-            f"Status: Completed\n"
-            f"Run ID: {run.id}\n"
-            f"Session ID: {run.session_id or 'N/A'}\n"
-            f"Output: {output}"
-        )
+    def _format_end_message(self, task: ScheduledTask, run: TaskRun) -> str:
+        """Format end notification message (success or failure)."""
+        # Determine overall status
+        if run.status == RunStatus.SUCCESS:
+            if run.task_outcome == TaskOutcome.FAILED:
+                status = "Failed (Semantic)"
+                reason = run.task_outcome_reason or "Task reported failure"
+            else:
+                status = "Completed"
+                reason = None
+        elif run.status == RunStatus.TIMEOUT:
+            status = "Timeout"
+            reason = f"Timed out after {task.timeout_seconds}s"
+        else:
+            status = "Failed"
+            reason = run.error_message or "Unknown error"
 
-    def _format_error_message(self, task: ScheduledTask, run: TaskRun) -> str:
-        """Format error notification message."""
-        error = run.error_message or "Unknown error"
-        return (
-            f"Task: {task.name}\n"
-            f"Status: Failed\n"
-            f"Run ID: {run.id}\n"
-            f"Attempt: {run.attempt_number}/{task.max_retries}\n"
-            f"Error: {error}"
-        )
+        lines = [
+            f"Task: {task.name}",
+            f"Status: {status}",
+            f"Run ID: {run.id}",
+            f"Attempt: {run.attempt_number}/{task.max_retries}",
+            f"Session ID: {run.session_id or 'N/A'}",
+        ]
+
+        if reason:
+            lines.append(f"Reason: {reason}")
+
+        # Add prettified output summary
+        if run.output:
+            extracted = prettify_output(run.output)
+            result = extracted.get("result", "")
+            if result:
+                # Truncate for notification
+                if len(result) > 500:
+                    result = result[:500] + "..."
+                lines.append(f"Output: {result}")
+
+            # Add cost if available
+            if extracted.get("cost_usd"):
+                lines.append(f"Cost: ${extracted['cost_usd']:.4f}")
+
+        return "\n".join(lines)
 
     def _send(self, config: NotificationConfig, subject: str, message: str) -> None:
         """Send notification via configured channels.

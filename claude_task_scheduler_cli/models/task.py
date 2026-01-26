@@ -45,12 +45,12 @@ class TaskStatus(str, Enum):
     DISABLED = "disabled"
 
 
-class NotificationEvent(str, Enum):
+class NotifyOn(str, Enum):
     """Events that trigger notifications."""
 
-    RUNNING = "running"
-    SUCCESS = "success"
-    FAILURE = "failure"
+    TASK_START = "task_start"
+    TASK_END = "task_end"
+    TASK_ERROR = "task_error"
 
 
 class NotificationConfig(CLIModel):
@@ -65,8 +65,8 @@ class NotificationConfig(CLIModel):
 
     id: str = Field(frozen=True)
     task_id: str = Field(frozen=True)
-    events: list[NotificationEvent] = Field(
-        default=[NotificationEvent.RUNNING, NotificationEvent.SUCCESS, NotificationEvent.FAILURE]
+    notify_on: list[NotifyOn] = Field(
+        default=[NotifyOn.TASK_START, NotifyOn.TASK_END, NotifyOn.TASK_ERROR]
     )
     slack_channels: list[SlackNotificationChannel] = Field(default_factory=list)
     gmail_channels: list[GmailNotificationChannel] = Field(default_factory=list)
@@ -163,8 +163,8 @@ class ScheduledTaskCreate(CLIModel):
     max_retries: int = 3
     timeout_seconds: int = 3600
     enabled: bool = True
-    notification_events: list[NotificationEvent] = Field(
-        default=[NotificationEvent.RUNNING, NotificationEvent.SUCCESS, NotificationEvent.FAILURE]
+    notify_on: list[NotifyOn] = Field(
+        default=[NotifyOn.TASK_START, NotifyOn.TASK_END, NotifyOn.TASK_ERROR]
     )
     slack_channel_ids: list[str] = Field(default_factory=list)
     gmail_channel_ids: list[str] = Field(default_factory=list)
@@ -187,7 +187,7 @@ class ScheduledTaskUpdate(CLIModel):
     max_retries: Optional[int] = None
     timeout_seconds: Optional[int] = None
     enabled: Optional[bool] = None
-    notification_events: Optional[list[NotificationEvent]] = None
+    notify_on: Optional[list[NotifyOn]] = None
     slack_channel_ids: Optional[list[str]] = None
     gmail_channel_ids: Optional[list[str]] = None
     macos_channel_ids: Optional[list[str]] = None

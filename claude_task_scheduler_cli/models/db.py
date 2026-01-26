@@ -115,20 +115,20 @@ class NotificationConfigDB(Base):
 
     id = Column(String, primary_key=True)
     task_id = Column(String, ForeignKey("scheduled_tasks.id"), unique=True, nullable=False)
-    events_json = Column(Text, default='["running", "success", "failure"]')
+    notify_on_json = Column(Text, default='["task_start", "task_end", "task_error"]')
 
     # Relationships
     task = relationship("ScheduledTaskDB", back_populates="notification_config")
 
     @property
-    def events(self) -> list[str]:
-        """Parse events from JSON."""
-        return json.loads(self.events_json) if self.events_json else []
+    def notify_on(self) -> list[str]:
+        """Parse notify_on from JSON."""
+        return json.loads(self.notify_on_json) if self.notify_on_json else []
 
-    @events.setter
-    def events(self, value: list[str]) -> None:
-        """Serialize events to JSON."""
-        self.events_json = json.dumps(value)
+    @notify_on.setter
+    def notify_on(self, value: list[str]) -> None:
+        """Serialize notify_on to JSON."""
+        self.notify_on_json = json.dumps(value)
 
 
 class SlackNotificationChannelDB(Base):
@@ -267,3 +267,73 @@ def _run_migrations(engine):
                     "ALTER TABLE task_runs ADD COLUMN task_outcome_reason TEXT"
                 ))
                 conn.commit()
+
+    # Migrate events_json to notify_on_json in notification_configs
+    if "notification_configs" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("notification_configs")}
+
+        # Check if we need to migrate from events_json to notify_on_json
+        if "events_json" in columns and "notify_on_json" not in columns:
+            with engine.connect() as conn:
+                # Add new column
+                conn.execute(text(
+                    "ALTER TABLE notification_configs ADD COLUMN notify_on_json TEXT DEFAULT '[\"task_start\", \"task_end\", \"task_error\"]'"
+                ))
+
+                # Migrate data: running -> task_start, success -> task_end, failure -> task_error
+                # First, get all existing configs
+                result = conn.execute(text("SELECT id, events_json FROM notification_configs"))
+                rows = result.fetchall()
+
+                for row in rows:
+                    config_id = row[0]
+                    old_events = json.loads(row[1]) if row[1] else []
+                    new_notify_on = []
+
+                    # Transform old values to new values
+                    if "running" in old_events:
+                        new_notify_on.append("task_start")
+                    if "success" in old_events:
+                        new_notify_on.append("task_end")
+                    if "failure" in old_events:
+                        new_notify_on.append("task_error")
+
+                    # Default to all if empty
+                    if not new_notify_on:
+                        new_notify_on = ["task_start", "task_end", "task_error"]
+
+                    conn.execute(
+                        text("UPDATE notification_configs SET notify_on_json = :notify_on WHERE id = :id"),
+                        {"notify_on": json.dumps(new_notify_on), "id": config_id}
+                    )
+
+                conn.commit()
+
+    # Seed default notification channels if none exist
+    import uuid
+    default_channels = [
+        {
+            "table": "slack_notification_channels",
+            "sql": "INSERT INTO slack_notification_channels (id, channel_name, enabled, is_default, workspace_id, delivery_method, delivery_user_id) "
+                   "VALUES (:id, 'Slack DM', 1, 1, 'T0F2BD3QA', 'direct_message', 'U01RZG11N9K')",
+        },
+        {
+            "table": "gmail_notification_channels",
+            "sql": "INSERT INTO gmail_notification_channels (id, channel_name, enabled, is_default, email_address) "
+                   "VALUES (:id, 'Email', 1, 1, 'adbertram@gmail.com')",
+        },
+        {
+            "table": "macos_notification_channels",
+            "sql": "INSERT INTO macos_notification_channels (id, channel_name, enabled, is_default, sound, ignore_dnd) "
+                   "VALUES (:id, 'Desktop', 1, 1, NULL, 0)",
+        },
+    ]
+
+    for channel_config in default_channels:
+        table = channel_config["table"]
+        if table in inspector.get_table_names():
+            with engine.connect() as conn:
+                result = conn.execute(text(f"SELECT COUNT(*) FROM {table} WHERE is_default = 1"))
+                if result.scalar() == 0:
+                    conn.execute(text(channel_config["sql"]), {"id": str(uuid.uuid4())})
+                    conn.commit()

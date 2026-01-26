@@ -7,7 +7,7 @@ import typer
 from ..db_client import DatabaseClient
 from ..health import check_daemon_health
 from ..models.task import (
-    NotificationEvent,
+    NotifyOn,
     ScheduledTaskCreate,
     ScheduledTaskUpdate,
 )
@@ -274,15 +274,55 @@ def _parse_notification_channels(
 
         if channel_type == "slack":
             defaults = db_client.get_default_slack_channels()
+            if not defaults:
+                print_warning(f"No default Slack channels configured. '{channel_type}' will be ignored.")
             slack_ids.extend([ch.id for ch in defaults])
         elif channel_type == "gmail":
             defaults = db_client.get_default_gmail_channels()
+            if not defaults:
+                print_warning(f"No default Gmail channels configured. '{channel_type}' will be ignored.")
             gmail_ids.extend([ch.id for ch in defaults])
         elif channel_type == "macos":
             defaults = db_client.get_default_macos_channels()
+            if not defaults:
+                print_warning(f"No default macOS channels configured. '{channel_type}' will be ignored.")
             macos_ids.extend([ch.id for ch in defaults])
 
     return slack_ids, gmail_ids, macos_ids
+
+
+VALID_NOTIFY_ON = {"task_start", "task_end", "task_error"}
+
+
+def _parse_notify_on(notify_on_str: Optional[str]) -> Optional[list[NotifyOn]]:
+    """Parse notify_on string into list of NotifyOn enum values.
+
+    Args:
+        notify_on_str: Comma-separated notify_on values (task_start, task_end, task_error)
+
+    Returns:
+        List of NotifyOn enum values, or None if input is None
+    """
+    if notify_on_str is None:
+        return None
+
+    result = []
+    for value in notify_on_str.split(","):
+        value = value.strip().lower()
+        if not value:
+            continue
+
+        if value not in VALID_NOTIFY_ON:
+            print_error(f"Invalid notify_on value: {value}. Valid values: {', '.join(sorted(VALID_NOTIFY_ON))}")
+            raise typer.Exit(1)
+
+        result.append(NotifyOn(value))
+
+    # Default to all if empty after parsing
+    if not result:
+        result = [NotifyOn.TASK_START, NotifyOn.TASK_END, NotifyOn.TASK_ERROR]
+
+    return result
 
 
 @app.command("create")
@@ -303,6 +343,11 @@ def create_task(
         "--notification-channels", "-N",
         help="Channel types: slack, gmail, macos (comma-separated, uses default channels)",
     ),
+    notify_on: Optional[str] = typer.Option(
+        None,
+        "--notify-on",
+        help="Notification triggers: task_start, task_end, task_error (comma-separated, default: all)",
+    ),
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
     """Create a new scheduled task.
@@ -312,6 +357,11 @@ def create_task(
 
     Use --notification-channels to specify which notification types to use.
     Default channels for each type will be automatically assigned.
+
+    Use --notify-on to specify which events trigger notifications:
+        - task_start: notification when task begins
+        - task_end: notification when task completes successfully
+        - task_error: notification when task fails
 
     Schedule formats:
         - "every minute"
@@ -353,20 +403,32 @@ def create_task(
         notification_channels, db_client
     )
 
+    # Parse notify_on values
+    notify_on_list = _parse_notify_on(notify_on)
+
+    # Validate: --notify-on requires at least one notification channel
+    if notify_on is not None and not (slack_channel_ids or gmail_channel_ids or macos_channel_ids):
+        print_error("--notify-on requires at least one notification channel. Use --notification-channels to specify channels.")
+        raise typer.Exit(1)
+
     # Create task
-    task_data = ScheduledTaskCreate(
-        name=name,
-        prompt=prompt,
-        project_path=project,
-        cron_expression=cron_expression,
-        model=model,
-        max_retries=max_retries,
-        timeout_seconds=timeout,
-        enabled=enabled,
-        slack_channel_ids=slack_channel_ids,
-        gmail_channel_ids=gmail_channel_ids,
-        macos_channel_ids=macos_channel_ids,
-    )
+    task_create_kwargs = {
+        "name": name,
+        "prompt": prompt,
+        "project_path": project,
+        "cron_expression": cron_expression,
+        "model": model,
+        "max_retries": max_retries,
+        "timeout_seconds": timeout,
+        "enabled": enabled,
+        "slack_channel_ids": slack_channel_ids,
+        "gmail_channel_ids": gmail_channel_ids,
+        "macos_channel_ids": macos_channel_ids,
+    }
+    if notify_on_list is not None:
+        task_create_kwargs["notify_on"] = notify_on_list
+
+    task_data = ScheduledTaskCreate(**task_create_kwargs)
 
     task = db_client.create_task(task_data)
 
@@ -491,6 +553,11 @@ def update_task(
         "--notification-channels", "-N",
         help="Channel types: slack, gmail, macos (comma-separated, replaces existing)",
     ),
+    notify_on: Optional[str] = typer.Option(
+        None,
+        "--notify-on",
+        help="Notification triggers: task_start, task_end, task_error (comma-separated)",
+    ),
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
     """Update a scheduled task.
@@ -498,6 +565,11 @@ def update_task(
     Use --notification-channels to specify which notification types to use.
     Default channels for each type will be automatically assigned.
     This replaces any existing notification channel assignments.
+
+    Use --notify-on to specify which events trigger notifications:
+        - task_start: notification when task begins
+        - task_end: notification when task completes successfully
+        - task_error: notification when task fails
 
     Schedule formats:
         - "every minute"
@@ -543,6 +615,14 @@ def update_task(
             notification_channels, db_client
         )
 
+    # Parse notify_on values if provided
+    notify_on_list = _parse_notify_on(notify_on)
+
+    # Validate: --notify-on requires at least one notification channel
+    if notify_on is not None and not (slack_channel_ids or gmail_channel_ids or macos_channel_ids):
+        print_error("--notify-on requires at least one notification channel. Use --notification-channels to specify channels.")
+        raise typer.Exit(1)
+
     update_data = ScheduledTaskUpdate(
         name=name,
         prompt=prompt,
@@ -554,6 +634,7 @@ def update_task(
         slack_channel_ids=slack_channel_ids,
         gmail_channel_ids=gmail_channel_ids,
         macos_channel_ids=macos_channel_ids,
+        notify_on=notify_on_list,
     )
 
     task = db_client.update_task(task_id, update_data)

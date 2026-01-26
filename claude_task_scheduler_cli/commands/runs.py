@@ -6,7 +6,7 @@ import typer
 
 from ..db_client import DatabaseClient
 from ..models.task import RunStatus
-from ..output import print_error, print_json, print_success, print_table, prettify_runs, prettify_run
+from ..output import print_error, print_json, print_success, print_table
 from ..scheduler import SchedulerService
 
 app = typer.Typer(help="Manage task runs", no_args_is_help=True)
@@ -28,7 +28,6 @@ def list_runs(
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (running, success, failure, timeout)"),
     limit: int = typer.Option(100, "--limit", "-l", help="Maximum number of results"),
     table: bool = typer.Option(False, "--table", help="Display as table"),
-    pretty: bool = typer.Option(True, "--pretty/--raw", help="Prettify output (parse Claude JSON, extract result/cost)"),
     filter: Optional[list[str]] = typer.Option(None, "--filter", "-f", help="Filter: field:op:value"),
     properties: Optional[str] = typer.Option(None, "--properties", "-p", help="Comma-separated list of fields"),
 ):
@@ -46,10 +45,6 @@ def list_runs(
 
     runs = db_client.list_runs(task_id=task_id, status=status_filter, limit=limit)
 
-    # Prettify output if requested
-    if pretty:
-        runs = prettify_runs(runs)
-
     if table:
         print_table(
             runs,
@@ -64,7 +59,6 @@ def list_runs(
 def get_run(
     run_id: str = typer.Argument(..., help="Run ID"),
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
-    pretty: bool = typer.Option(True, "--pretty/--raw", help="Prettify output (parse Claude JSON, extract result/cost)"),
 ):
     """Get a specific run by ID."""
     db_client = _get_db_client()
@@ -73,10 +67,6 @@ def get_run(
     if not run:
         print_error(f"Run not found: {run_id}")
         raise typer.Exit(1)
-
-    # Prettify output if requested
-    if pretty:
-        run = prettify_run(run)
 
     if table:
         print_table(

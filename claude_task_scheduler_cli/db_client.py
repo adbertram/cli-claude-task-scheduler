@@ -6,6 +6,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from .output import prettify_output
+
 from .models.db import (
     GmailNotificationChannelDB,
     NotificationConfigDB,
@@ -37,7 +39,7 @@ from .models.notification import (
 )
 from .models.task import (
     NotificationConfig,
-    NotificationEvent,
+    NotifyOn,
     RunStatus,
     ScheduledTask,
     ScheduledTaskCreate,
@@ -97,7 +99,7 @@ class DatabaseClient:
             notif_db = NotificationConfigDB(
                 id=notif_id,
                 task_id=task_id,
-                events_json=str([e.value for e in data.notification_events]).replace("'", '"'),
+                notify_on_json=str([e.value for e in data.notify_on]).replace("'", '"'),
             )
             session.add(notif_db)
 
@@ -185,7 +187,7 @@ class DatabaseClient:
             # Update task fields
             update_data = data.model_dump(
                 exclude_none=True,
-                exclude={"notification_events", "slack_channel_ids", "gmail_channel_ids", "macos_channel_ids"},
+                exclude={"notify_on", "slack_channel_ids", "gmail_channel_ids", "macos_channel_ids"},
             )
             for key, value in update_data.items():
                 setattr(task_db, key, value)
@@ -193,8 +195,8 @@ class DatabaseClient:
 
             # Update notification config
             notif_db = session.query(NotificationConfigDB).filter_by(task_id=task_id).first()
-            if notif_db and data.notification_events is not None:
-                notif_db.events_json = str([e.value for e in data.notification_events]).replace("'", '"')
+            if notif_db and data.notify_on is not None:
+                notif_db.notify_on_json = str([e.value for e in data.notify_on]).replace("'", '"')
 
             # Update Slack channel assignments (replace all if provided)
             if data.slack_channel_ids is not None:
@@ -461,6 +463,13 @@ class DatabaseClient:
             notification_config=notif,
         )
 
+    def _prettify_run_output(self, raw_output: str) -> str:
+        """Extract prettified result from raw Claude output."""
+        if not raw_output:
+            return raw_output
+        extracted = prettify_output(raw_output)
+        return extracted.get("result") or raw_output
+
     def _run_db_to_model(self, run_db: TaskRunDB) -> TaskRun:
         """Convert DB run to Pydantic model."""
         return TaskRun(
@@ -472,7 +481,7 @@ class DatabaseClient:
             session_id=run_db.session_id,
             exit_code=run_db.exit_code,
             error_message=run_db.error_message,
-            output=run_db.output,
+            output=self._prettify_run_output(run_db.output),
             attempt_number=run_db.attempt_number,
             task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
             task_outcome_reason=run_db.task_outcome_reason,
@@ -493,7 +502,7 @@ class DatabaseClient:
             session_id=run_db.session_id,
             exit_code=run_db.exit_code,
             error_message=run_db.error_message,
-            output=run_db.output,
+            output=self._prettify_run_output(run_db.output),
             attempt_number=run_db.attempt_number,
             task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
             task_outcome_reason=run_db.task_outcome_reason,
@@ -511,14 +520,14 @@ class DatabaseClient:
         slack_channels_db = slack_channels_db or []
         gmail_channels_db = gmail_channels_db or []
         macos_channels_db = macos_channels_db or []
-        events = [NotificationEvent(e) for e in notif_db.events]
+        notify_on = [NotifyOn(e) for e in notif_db.notify_on]
         slack_channels = [self._slack_channel_db_to_model(ch) for ch in slack_channels_db]
         gmail_channels = [self._gmail_channel_db_to_model(ch) for ch in gmail_channels_db]
         macos_channels = [self._macos_channel_db_to_model(ch) for ch in macos_channels_db]
         return NotificationConfig(
             id=notif_db.id,
             task_id=notif_db.task_id,
-            events=events,
+            notify_on=notify_on,
             slack_channels=slack_channels,
             gmail_channels=gmail_channels,
             macos_channels=macos_channels,

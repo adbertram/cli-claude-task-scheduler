@@ -32,7 +32,7 @@ from .task import (
     GmailChannelCreate,
     MacosChannelCreate,
     NotificationConfig,
-    NotificationEvent,
+    NotifyOn,
     ScheduledTask,
     ScheduledTaskCreate,
     ScheduledTaskDetail,
@@ -57,7 +57,7 @@ __all__ = [
     "TaskStatus",
     # Notification models
     "NotificationConfig",
-    "NotificationEvent",
+    "NotifyOn",
     # Notification channel models
     "NotificationChannel",
     "SlackNotificationChannel",
