@@ -16,8 +16,13 @@ from .commands import daemon, logs, notification_channels, runs, tasks
 app.add_typer(tasks.app, name="tasks", help="Manage scheduled tasks")
 app.add_typer(runs.app, name="runs", help="Manage task runs")
 app.add_typer(logs.app, name="logs", help="View and manage task activity logs")
-app.add_typer(daemon.app, name="daemon", help="Manage scheduler daemon")
 app.add_typer(notification_channels.app, name="channels", help="Manage notification channels")
+
+# Register daemon commands directly on root (not as subgroup)
+app.command("start", help="Start the scheduler daemon")(daemon.start)
+app.command("stop", help="Stop the scheduler daemon")(daemon.stop)
+app.command("status", help="Check scheduler daemon status")(daemon.status)
+app.command("healthcheck", help="Check if the scheduler daemon is running and healthy")(daemon.healthcheck)
 
 
 @app.callback(invoke_without_command=True)

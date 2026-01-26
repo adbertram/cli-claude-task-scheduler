@@ -1,4 +1,7 @@
-"""Daemon management commands."""
+"""Daemon management commands.
+
+These commands are registered directly on the root CLI, not as a subgroup.
+"""
 
 import os
 import signal
@@ -13,8 +16,6 @@ from ..health import check_daemon_health, get_pid_file_path
 from ..models.task import DaemonStatus
 from ..output import print_error, print_info, print_json, print_success, print_table
 from ..scheduler import SchedulerService
-
-app = typer.Typer(help="Manage scheduler daemon", no_args_is_help=True)
 
 # Global scheduler instance for signal handling
 _scheduler: SchedulerService | None = None
@@ -80,8 +81,7 @@ def _write_pid_file():
     pid_file.write_text(str(os.getpid()))
 
 
-@app.command("start")
-def start_daemon(
+def start(
     background: bool = typer.Option(False, "--background", "-b", help="Run in background as daemon"),
 ):
     """Start the scheduler daemon.
@@ -141,8 +141,7 @@ def start_daemon(
             print_success("Scheduler stopped")
 
 
-@app.command("status")
-def daemon_status(
+def status(
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
     """Check scheduler daemon status.
@@ -197,7 +196,6 @@ def daemon_status(
     print_info("\nNote: Run 'daemon start' to start the scheduler")
 
 
-@app.command("healthcheck")
 def healthcheck(
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
@@ -220,8 +218,7 @@ def healthcheck(
     raise typer.Exit(code=0 if health.get("running") else 1)
 
 
-@app.command("stop")
-def stop_daemon():
+def stop():
     """Stop the scheduler daemon."""
     # Check if daemon is running
     health = check_daemon_health()

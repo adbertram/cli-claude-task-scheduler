@@ -12,11 +12,13 @@ pip install -e .
 claude-task-scheduler --help
 claude-task-scheduler tasks --help
 claude-task-scheduler runs --help
-claude-task-scheduler daemon --help
 claude-task-scheduler channels --help
 
-# Start scheduler daemon (foreground)
-claude-task-scheduler daemon start
+# Daemon commands (at root level)
+claude-task-scheduler start           # Start scheduler daemon
+claude-task-scheduler stop            # Stop scheduler daemon
+claude-task-scheduler status          # Check daemon status
+claude-task-scheduler healthcheck     # Check daemon health
 
 # Docker deployment
 docker-compose build
