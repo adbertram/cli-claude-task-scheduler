@@ -82,6 +82,158 @@ def _cron_to_friendly(cron: str) -> str:
     return cron
 
 
+def _parse_time(time_str: str) -> tuple[int, int]:
+    """Parse time string like '12AM', '9PM', '14:30', '9:00AM' into (hour, minute).
+
+    Returns (hour in 24h format, minute).
+    """
+    import re
+
+    time_str = time_str.strip().upper()
+
+    # Handle 24-hour format with minutes (e.g., "14:30")
+    match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+        raise ValueError(f"Invalid time: {time_str}")
+
+    # Handle 12-hour format with minutes (e.g., "9:30AM", "12:00PM")
+    match = re.match(r'^(\d{1,2}):(\d{2})\s*(AM|PM)$', time_str)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        period = match.group(3)
+        if hour < 1 or hour > 12 or minute > 59:
+            raise ValueError(f"Invalid time: {time_str}")
+        if period == "AM":
+            hour = 0 if hour == 12 else hour
+        else:  # PM
+            hour = 12 if hour == 12 else hour + 12
+        return hour, minute
+
+    # Handle simple format (e.g., "9AM", "12PM", "12AM")
+    match = re.match(r'^(\d{1,2})\s*(AM|PM)$', time_str)
+    if match:
+        hour = int(match.group(1))
+        period = match.group(2)
+        if hour < 1 or hour > 12:
+            raise ValueError(f"Invalid time: {time_str}")
+        if period == "AM":
+            hour = 0 if hour == 12 else hour
+        else:  # PM
+            hour = 12 if hour == 12 else hour + 12
+        return hour, 0
+
+    raise ValueError(f"Cannot parse time: {time_str}")
+
+
+def _parse_day_of_week(day_str: str) -> int:
+    """Parse day of week string to cron number (0=Sunday)."""
+    day_map = {
+        "sunday": 0, "sun": 0,
+        "monday": 1, "mon": 1,
+        "tuesday": 2, "tue": 2, "tues": 2,
+        "wednesday": 3, "wed": 3,
+        "thursday": 4, "thu": 4, "thur": 4, "thurs": 4,
+        "friday": 5, "fri": 5,
+        "saturday": 6, "sat": 6,
+    }
+    day_lower = day_str.lower().strip()
+    if day_lower in day_map:
+        return day_map[day_lower]
+    raise ValueError(f"Unknown day of week: {day_str}")
+
+
+def _parse_schedule(schedule: str) -> Optional[str]:
+    """Parse a friendly schedule string into a cron expression.
+
+    Supported formats:
+    - "every minute" → "* * * * *"
+    - "every N minutes" → "*/N * * * *"
+    - "every N hours" → "0 */N * * *"
+    - "hourly" / "every hour" → "0 * * * *"
+    - "daily at 9AM" / "every day at 9AM" → "0 9 * * *"
+    - "every monday at 9AM" → "0 9 * * 1"
+    - "every month on the 1st at 9AM" → "0 9 1 * *"
+    - Raw cron expression (5 space-separated fields) → returned as-is
+
+    Returns:
+        Cron expression string, or None if parsing fails.
+    """
+    import re
+
+    schedule = schedule.strip()
+
+    # Check if it's already a cron expression (5 space-separated fields)
+    if len(schedule.split()) == 5:
+        return schedule
+
+    schedule_lower = schedule.lower()
+
+    # "every minute"
+    if schedule_lower == "every minute":
+        return "* * * * *"
+
+    # "every N minutes" or "every N minute"
+    match = re.match(r'^every\s+(\d+)\s+minutes?$', schedule_lower)
+    if match:
+        interval = int(match.group(1))
+        if 1 <= interval <= 59:
+            return f"*/{interval} * * * *"
+        return None
+
+    # "every N hours" or "every N hour"
+    match = re.match(r'^every\s+(\d+)\s+hours?$', schedule_lower)
+    if match:
+        interval = int(match.group(1))
+        if 1 <= interval <= 23:
+            return f"0 */{interval} * * *"
+        return None
+
+    # "hourly" or "every hour"
+    if schedule_lower in ("hourly", "every hour"):
+        return "0 * * * *"
+
+    # "daily at TIME" or "every day at TIME"
+    match = re.match(r'^(?:daily|every\s+day)\s+(?:at\s+)?(.+)$', schedule_lower)
+    if match:
+        try:
+            hour, minute = _parse_time(match.group(1))
+            return f"{minute} {hour} * * *"
+        except ValueError:
+            return None
+
+    # "every WEEKDAY at TIME" (e.g., "every monday at 9AM")
+    match = re.match(r'^every\s+(\w+)\s+(?:at\s+)?(.+)$', schedule_lower)
+    if match:
+        day_str = match.group(1)
+        time_str = match.group(2)
+        try:
+            day_num = _parse_day_of_week(day_str)
+            hour, minute = _parse_time(time_str)
+            return f"{minute} {hour} * * {day_num}"
+        except ValueError:
+            pass  # Not a valid day of week, continue
+
+    # "every month on the Nth at TIME" or "monthly on the Nth at TIME"
+    match = re.match(r'^(?:every\s+month|monthly)\s+(?:on\s+)?(?:the\s+)?(\d+)(?:st|nd|rd|th)?\s+(?:at\s+)?(.+)$', schedule_lower)
+    if match:
+        day_of_month = int(match.group(1))
+        time_str = match.group(2)
+        if 1 <= day_of_month <= 31:
+            try:
+                hour, minute = _parse_time(time_str)
+                return f"{minute} {hour} {day_of_month} * *"
+            except ValueError:
+                return None
+
+    # Not recognized as friendly format
+    return None
+
+
 def _get_db_client() -> DatabaseClient:
     """Get database client."""
     return DatabaseClient()
@@ -138,7 +290,10 @@ def create_task(
     name: str = typer.Option(..., "--name", "-n", help="Task name"),
     prompt: str = typer.Option(..., "--prompt", "-p", help="Claude Code prompt to execute"),
     project: str = typer.Option(..., "--project", "-d", help="Project directory path"),
-    cron: Optional[str] = typer.Option(None, "--cron", "-c", help="Cron expression (e.g., '0 9 * * *')"),
+    schedule: Optional[str] = typer.Option(
+        None, "--schedule", "-s",
+        help="Schedule: 'every 5 minutes', 'daily at 9AM', 'every monday at 9AM', or cron expression",
+    ),
     model: str = typer.Option(..., "--model", "-m", help="Claude model (e.g., 'opus', 'sonnet')"),
     max_retries: int = typer.Option(3, "--max-retries", "-r", help="Maximum retry attempts"),
     timeout: int = typer.Option(3600, "--timeout", "-T", help="Execution timeout in seconds (60-86400)"),
@@ -152,24 +307,41 @@ def create_task(
 ):
     """Create a new scheduled task.
 
-    Tasks can be created without a schedule and updated later with 'tasks update --cron'.
+    Tasks can be created without a schedule and updated later with 'tasks update --schedule'.
     Tasks without a schedule can only be run manually via 'tasks trigger'.
 
     Use --notification-channels to specify which notification types to use.
     Default channels for each type will be automatically assigned.
 
+    Schedule formats:
+        - "every minute"
+        - "every 5 minutes", "every 30 minutes"
+        - "every 2 hours", "hourly"
+        - "daily at 9AM", "every day at 12PM"
+        - "every monday at 9AM", "every friday at 5PM"
+        - "every month on the 1st at 9AM", "monthly on the 15th at 12PM"
+        - Raw cron: "0 9 * * *", "*/15 * * * *"
+
     Examples:
         claude-task-scheduler tasks create -n "My Task" -p "Do something" -d /path -m opus
-        claude-task-scheduler tasks create -n "Scheduled" -p "Do it" -d /path -m opus -c "0 9 * * *"
+        claude-task-scheduler tasks create -n "Daily" -p "Do it" -d /path -m opus -s "daily at 9AM"
+        claude-task-scheduler tasks create -n "Weekly" -p "Do it" -d /path -m opus -s "every monday at 9AM"
         --notification-channels slack,macos
     """
     db_client = _get_db_client()
     scheduler = _get_scheduler()
 
-    # Validate cron expression if provided
-    if cron and not scheduler.validate_cron(cron):
-        print_error(f"Invalid cron expression: {cron}")
-        raise typer.Exit(1)
+    # Parse and validate schedule if provided
+    cron_expression = None
+    if schedule:
+        cron_expression = _parse_schedule(schedule)
+        if cron_expression is None:
+            print_error(f"Invalid schedule: {schedule}")
+            print_error("Use formats like: 'every 5 minutes', 'daily at 9AM', 'every monday at 9AM', or a cron expression")
+            raise typer.Exit(1)
+        if not scheduler.validate_cron(cron_expression):
+            print_error(f"Invalid schedule expression: {schedule}")
+            raise typer.Exit(1)
 
     # Validate timeout range
     if timeout < 60 or timeout > 86400:
@@ -186,7 +358,7 @@ def create_task(
         name=name,
         prompt=prompt,
         project_path=project,
-        cron_expression=cron,
+        cron_expression=cron_expression,
         model=model,
         max_retries=max_retries,
         timeout_seconds=timeout,
@@ -210,11 +382,11 @@ def create_task(
     print_success(f"Task '{name}' created successfully")
 
     # Warn if no schedule set
-    if not cron:
+    if not schedule:
         print_warning(
             "Task created without a schedule. It can only be run manually via:\n"
             "  claude-task-scheduler tasks trigger <task-id>\n"
-            "To add a schedule: claude-task-scheduler tasks update <task-id> --cron '0 9 * * *'"
+            "To add a schedule: claude-task-scheduler tasks update <task-id> --schedule 'daily at 9AM'"
         )
     else:
         # Check daemon health and warn if not running
@@ -307,7 +479,10 @@ def update_task(
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Task name"),
     prompt: Optional[str] = typer.Option(None, "--prompt", "-p", help="Claude Code prompt"),
     project: Optional[str] = typer.Option(None, "--project", "-d", help="Project directory path"),
-    cron: Optional[str] = typer.Option(None, "--cron", "-c", help="Cron expression"),
+    schedule: Optional[str] = typer.Option(
+        None, "--schedule", "-s",
+        help="Schedule: 'every 5 minutes', 'daily at 9AM', 'every monday at 9AM', or cron expression",
+    ),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Claude model"),
     max_retries: Optional[int] = typer.Option(None, "--max-retries", "-r", help="Maximum retry attempts"),
     timeout: Optional[int] = typer.Option(None, "--timeout", "-T", help="Execution timeout in seconds (60-86400)"),
@@ -324,18 +499,34 @@ def update_task(
     Default channels for each type will be automatically assigned.
     This replaces any existing notification channel assignments.
 
+    Schedule formats:
+        - "every minute"
+        - "every 5 minutes", "every 30 minutes"
+        - "every 2 hours", "hourly"
+        - "daily at 9AM", "every day at 12PM"
+        - "every monday at 9AM", "every friday at 5PM"
+        - "every month on the 1st at 9AM", "monthly on the 15th at 12PM"
+        - Raw cron: "0 9 * * *", "*/15 * * * *"
+
     Examples:
+        --schedule "daily at 9AM"
+        --schedule "every monday at 9AM"
         --notification-channels slack,macos
-        --notification-channels gmail
-        --notification-channels slack,gmail,macos
     """
     db_client = _get_db_client()
     scheduler = _get_scheduler()
 
-    # Validate cron if provided
-    if cron and not scheduler.validate_cron(cron):
-        print_error(f"Invalid cron expression: {cron}")
-        raise typer.Exit(1)
+    # Parse and validate schedule if provided
+    cron_expression = None
+    if schedule:
+        cron_expression = _parse_schedule(schedule)
+        if cron_expression is None:
+            print_error(f"Invalid schedule: {schedule}")
+            print_error("Use formats like: 'every 5 minutes', 'daily at 9AM', 'every monday at 9AM', or a cron expression")
+            raise typer.Exit(1)
+        if not scheduler.validate_cron(cron_expression):
+            print_error(f"Invalid schedule expression: {schedule}")
+            raise typer.Exit(1)
 
     # Validate timeout if provided
     if timeout is not None and (timeout < 60 or timeout > 86400):
@@ -356,7 +547,7 @@ def update_task(
         name=name,
         prompt=prompt,
         project_path=project,
-        cron_expression=cron,
+        cron_expression=cron_expression,
         model=model,
         max_retries=max_retries,
         timeout_seconds=timeout,
