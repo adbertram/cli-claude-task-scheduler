@@ -16,9 +16,17 @@ dependencies = [
     "croniter>=2.0.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7.0.0"]
+
 [project.scripts]
 claude-task-scheduler = "claude_task_scheduler_cli.main:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["claude_task_scheduler_cli*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

@@ -54,6 +54,7 @@ class ScheduledTaskDB(Base):
     cron_expression = Column(String, nullable=False)
     model = Column(String, nullable=False)
     max_retries = Column(Integer, default=3)
+    timeout_seconds = Column(Integer, default=3600)
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

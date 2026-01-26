@@ -8,6 +8,7 @@ This separation enables clean piping: `claude-task-scheduler list | jq '.field'`
 """
 import json
 import sys
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel
@@ -18,6 +19,31 @@ from rich import box
 
 # Rich console for table output
 console = Console()
+
+
+def _utc_to_local(dt: datetime) -> datetime:
+    """Convert a naive UTC datetime to local time."""
+    # Treat naive datetime as UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    # Convert to local time
+    return dt.astimezone()
+
+
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    """Try to parse an ISO datetime string."""
+    # Common ISO formats from Pydantic serialization
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S.%f",  # 2024-01-15T10:30:00.123456
+        "%Y-%m-%dT%H:%M:%S",     # 2024-01-15T10:30:00
+        "%Y-%m-%d %H:%M:%S.%f",  # 2024-01-15 10:30:00.123456
+        "%Y-%m-%d %H:%M:%S",     # 2024-01-15 10:30:00
+    ]:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _format_cell_value(value: Any) -> str:
@@ -34,6 +60,15 @@ def _format_cell_value(value: Any) -> str:
         return ""
     if isinstance(value, bool):
         return "✓" if value else "✗"
+    if isinstance(value, datetime):
+        local_dt = _utc_to_local(value)
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, str):
+        # Try to parse ISO datetime strings and convert to local time
+        dt = _parse_iso_datetime(value)
+        if dt is not None:
+            local_dt = _utc_to_local(dt)
+            return local_dt.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)

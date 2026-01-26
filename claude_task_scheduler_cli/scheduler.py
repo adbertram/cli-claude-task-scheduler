@@ -157,7 +157,7 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
             input=task.prompt,
             capture_output=True,
             text=True,
-            timeout=3600,  # 1 hour timeout
+            timeout=task.timeout_seconds,
             cwd=task.project_path,
         )
 
@@ -191,7 +191,7 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
     except subprocess.TimeoutExpired:
         return {
             "exit_code": -1,
-            "error": "Task execution timed out after 1 hour",
+            "error": f"Task execution timed out after {task.timeout_seconds} seconds",
             "stdout": None,
             "stderr": None,
         }

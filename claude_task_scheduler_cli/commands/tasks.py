@@ -141,6 +141,7 @@ def create_task(
     cron: str = typer.Option(..., "--cron", "-c", help="Cron expression (e.g., '0 9 * * *')"),
     model: str = typer.Option(..., "--model", "-m", help="Claude model (e.g., 'opus', 'sonnet')"),
     max_retries: int = typer.Option(3, "--max-retries", "-r", help="Maximum retry attempts"),
+    timeout: int = typer.Option(3600, "--timeout", "-T", help="Execution timeout in seconds (60-86400)"),
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Enable task immediately"),
     notification_channels: Optional[str] = typer.Option(
         None,
@@ -167,6 +168,11 @@ def create_task(
         print_error(f"Invalid cron expression: {cron}")
         raise typer.Exit(1)
 
+    # Validate timeout range
+    if timeout < 60 or timeout > 86400:
+        print_error("Timeout must be between 60 and 86400 seconds")
+        raise typer.Exit(1)
+
     # Parse channel types and get default channel IDs
     slack_channel_ids, gmail_channel_ids, macos_channel_ids = _parse_notification_channels(
         notification_channels, db_client
@@ -180,6 +186,7 @@ def create_task(
         cron_expression=cron,
         model=model,
         max_retries=max_retries,
+        timeout_seconds=timeout,
         enabled=enabled,
         slack_channel_ids=slack_channel_ids,
         gmail_channel_ids=gmail_channel_ids,
@@ -292,6 +299,7 @@ def update_task(
     cron: Optional[str] = typer.Option(None, "--cron", "-c", help="Cron expression"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Claude model"),
     max_retries: Optional[int] = typer.Option(None, "--max-retries", "-r", help="Maximum retry attempts"),
+    timeout: Optional[int] = typer.Option(None, "--timeout", "-T", help="Execution timeout in seconds (60-86400)"),
     notification_channels: Optional[str] = typer.Option(
         None,
         "--notification-channels", "-N",
@@ -318,6 +326,11 @@ def update_task(
         print_error(f"Invalid cron expression: {cron}")
         raise typer.Exit(1)
 
+    # Validate timeout if provided
+    if timeout is not None and (timeout < 60 or timeout > 86400):
+        print_error("Timeout must be between 60 and 86400 seconds")
+        raise typer.Exit(1)
+
     # Parse channel types if provided
     slack_channel_ids = None
     gmail_channel_ids = None
@@ -335,6 +348,7 @@ def update_task(
         cron_expression=cron,
         model=model,
         max_retries=max_retries,
+        timeout_seconds=timeout,
         slack_channel_ids=slack_channel_ids,
         gmail_channel_ids=gmail_channel_ids,
         macos_channel_ids=macos_channel_ids,

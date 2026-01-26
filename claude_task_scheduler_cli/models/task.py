@@ -61,6 +61,7 @@ class ScheduledTask(CLIModel):
     cron_expression: str
     model: str
     max_retries: int = 3
+    timeout_seconds: int = 3600
     enabled: bool = True
     created_at: datetime = Field(frozen=True)
     updated_at: datetime = Field(frozen=True)
@@ -136,6 +137,7 @@ class ScheduledTaskCreate(CLIModel):
     cron_expression: str
     model: str
     max_retries: int = 3
+    timeout_seconds: int = 3600
     enabled: bool = True
     notification_events: list[NotificationEvent] = Field(
         default=[NotificationEvent.START, NotificationEvent.SUCCESS, NotificationEvent.ERROR]
@@ -159,6 +161,7 @@ class ScheduledTaskUpdate(CLIModel):
     cron_expression: Optional[str] = None
     model: Optional[str] = None
     max_retries: Optional[int] = None
+    timeout_seconds: Optional[int] = None
     enabled: Optional[bool] = None
     notification_events: Optional[list[NotificationEvent]] = None
     slack_channel_ids: Optional[list[str]] = None
