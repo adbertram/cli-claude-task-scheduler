@@ -11,3 +11,4 @@ build/
 # Claude Code workspaces
 plans/
 agent_workspaces/
+_temp/
