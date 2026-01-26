@@ -1,11 +1,16 @@
 """Scheduler service using APScheduler for task execution."""
 
+import http.server
+import json
 import os
 import re
+import socketserver
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -15,8 +20,222 @@ from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter
 
 from .db_client import DatabaseClient
+from .health import get_socket_path
+from .logger import LoggerService
 from .models.task import ScheduledTask, TaskRun, TaskStatus
 from .notifications import NotificationService
+
+
+def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) -> Optional[TaskRun]:
+    """Module-level function for APScheduler job execution.
+
+    This is a standalone function (not a method) because APScheduler's SQLAlchemyJobStore
+    pickles jobs for persistence. Instance methods would pickle the entire object,
+    including SQLAlchemy engines which can't be pickled.
+
+    Args:
+        task_id: ID of the task to execute
+        db_path: Path to the SQLite database
+        attempt_number: Current attempt number (for retries)
+
+    Returns:
+        TaskRun record or None if task not found
+    """
+    # Create fresh clients for this execution
+    db_client = DatabaseClient(db_path)
+    notification_service = NotificationService(db_client)
+    logger_service = LoggerService(db_client)
+
+    task = db_client.get_task(task_id)
+    if not task:
+        return None
+
+    # Create run record
+    run = db_client.create_run(task_id, attempt_number)
+
+    # Log task start
+    logger_service.log_task_start(task, run)
+
+    # Send start notification
+    notification_service.notify_start(task, run)
+
+    try:
+        # Execute Claude Code
+        result = _invoke_claude_standalone(task, run, logger_service)
+
+        # Update run with results
+        status = TaskStatus.COMPLETED if result["exit_code"] == 0 else TaskStatus.FAILED
+        run = db_client.update_run(
+            run.id,
+            status=status,
+            session_id=result.get("session_id"),
+            exit_code=result["exit_code"],
+            error_message=result.get("error"),
+            summary=result.get("summary"),
+            completed_at=datetime.utcnow(),
+        )
+
+        # Log completion or failure
+        if status == TaskStatus.COMPLETED:
+            logger_service.log_task_complete(
+                task, run,
+                stdout=result.get("stdout"),
+                stderr=result.get("stderr"),
+            )
+        else:
+            logger_service.log_task_failed(
+                task, run,
+                error=result.get("error", "Unknown error"),
+                stdout=result.get("stdout"),
+                stderr=result.get("stderr"),
+            )
+
+        # Send notification
+        if status == TaskStatus.COMPLETED:
+            notification_service.notify_success(task, run)
+        else:
+            notification_service.notify_error(task, run)
+
+        # Handle retry on failure
+        if status == TaskStatus.FAILED and attempt_number < task.max_retries:
+            _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
+
+    except Exception as e:
+        # Update run with error
+        run = db_client.update_run(
+            run.id,
+            status=TaskStatus.FAILED,
+            error_message=str(e),
+            completed_at=datetime.utcnow(),
+        )
+
+        # Log failure
+        logger_service.log_task_failed(task, run, error=str(e))
+
+        # Send error notification
+        notification_service.notify_error(task, run)
+
+        # Handle retry
+        if attempt_number < task.max_retries:
+            _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
+
+    return run
+
+
+def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service: LoggerService) -> dict:
+    """Invoke Claude Code CLI (standalone version).
+
+    Args:
+        task: The task to execute
+        run: The run record for logging
+        logger_service: Logger service for output capture
+
+    Returns:
+        Dict with exit_code, session_id, summary, error, stdout, stderr
+    """
+    cmd = [
+        "claude",
+        "--print",
+        "--model", task.model,
+        "--output-format", "json",
+    ]
+
+    # Log command execution
+    logger_service.log_command_executed(task, run, cmd, task.project_path)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=task.prompt,
+            capture_output=True,
+            text=True,
+            timeout=3600,  # 1 hour timeout
+            cwd=task.project_path,
+        )
+
+        # Log output captured (full output, no truncation)
+        logger_service.log_output_captured(
+            task, run,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+        )
+
+        # Try to parse session ID from output
+        session_id = None
+        match = re.search(r'session[_-]?id["\s:]+([a-f0-9-]+)', result.stdout, re.IGNORECASE)
+        if match:
+            session_id = match.group(1)
+
+        # Generate summary from output (first 500 chars)
+        output = result.stdout or result.stderr or "No output"
+        summary = output[:500] + "..." if len(output) > 500 else output
+
+        return {
+            "exit_code": result.returncode,
+            "session_id": session_id,
+            "summary": summary,
+            "error": result.stderr if result.returncode != 0 else None,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "exit_code": -1,
+            "error": "Task execution timed out after 1 hour",
+            "stdout": None,
+            "stderr": None,
+        }
+    except Exception as e:
+        return {
+            "exit_code": -1,
+            "error": str(e),
+            "stdout": None,
+            "stderr": None,
+        }
+
+
+def _schedule_retry_standalone(
+    task_id: str,
+    db_path: str,
+    next_attempt: int,
+    task: ScheduledTask,
+    run: TaskRun,
+    logger_service: LoggerService,
+) -> int:
+    """Schedule a retry with exponential backoff (standalone version).
+
+    This creates a one-shot job in a temporary scheduler just for the retry.
+
+    Args:
+        task_id: Task to retry
+        db_path: Path to database
+        next_attempt: Attempt number for the retry
+        task: Task object (for logging)
+        run: Run object (for logging)
+        logger_service: Logger for recording retry
+
+    Returns:
+        Delay in seconds before retry
+    """
+    # Exponential backoff: 1min, 2min, 4min, 8min, etc.
+    delay_seconds = 60 * (2 ** (next_attempt - 1))
+
+    # Log the retry
+    logger_service.log_task_retry(task, run, next_attempt, delay_seconds)
+
+    # Schedule via subprocess to avoid needing scheduler instance
+    # The retry will be picked up when scheduler restarts or via direct execution
+    # For now, use a simple thread with sleep
+    def delayed_retry():
+        time.sleep(delay_seconds)
+        execute_scheduled_task(task_id, db_path, next_attempt)
+
+    retry_thread = threading.Thread(target=delayed_retry, daemon=True)
+    retry_thread.start()
+
+    return delay_seconds
 
 
 class SchedulerService:
@@ -33,6 +252,9 @@ class SchedulerService:
         self._scheduler: Optional[BackgroundScheduler] = None
         self._start_time: Optional[datetime] = None
         self._notification_service = NotificationService(self.db_client)
+        self._logger_service = LoggerService(self.db_client)
+        self._health_server: Optional[socketserver.UnixStreamServer] = None
+        self._health_thread: Optional[threading.Thread] = None
 
     def _get_default_db_path(self) -> str:
         """Get default database path."""
@@ -69,15 +291,90 @@ class SchedulerService:
         self._scheduler.start()
         self._start_time = datetime.utcnow()
 
+        # Start the health check server
+        self._start_health_server()
+
         # Load all enabled tasks
         self._load_enabled_tasks()
 
     def stop(self) -> None:
         """Stop the scheduler."""
+        # Stop the health check server first
+        self._stop_health_server()
+
         if self._scheduler is not None:
             self._scheduler.shutdown(wait=True)
             self._scheduler = None
             self._start_time = None
+
+    def _start_health_server(self) -> None:
+        """Start Unix socket health server for daemon status checks."""
+        socket_path = get_socket_path()
+
+        # Clean up stale socket file
+        if socket_path.exists():
+            socket_path.unlink()
+
+        # Ensure directory exists
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Reference to self for use in handler
+        scheduler_service = self
+
+        class HealthHandler(http.server.BaseHTTPRequestHandler):
+            """HTTP handler for health check requests."""
+
+            def log_message(self, format, *args):
+                """Suppress request logging."""
+                pass
+
+            def do_GET(self):
+                """Handle GET requests."""
+                if self.path == "/health":
+                    uptime = scheduler_service.get_uptime_seconds()
+                    health = {
+                        "running": True,
+                        "uptime_seconds": int(uptime) if uptime else 0,
+                        "job_count": scheduler_service.get_job_count(),
+                        "pid": os.getpid(),
+                    }
+                    response = json.dumps(health).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(response)))
+                    self.end_headers()
+                    self.wfile.write(response)
+                else:
+                    self.send_error(404, "Not Found")
+
+        class UnixSocketHTTPServer(socketserver.UnixStreamServer):
+            """HTTP server using Unix socket."""
+
+            def get_request(self):
+                """Get the request and client address."""
+                request, _ = super().get_request()
+                return request, ("unix-socket", 0)
+
+        self._health_server = UnixSocketHTTPServer(str(socket_path), HealthHandler)
+        self._health_thread = threading.Thread(
+            target=self._health_server.serve_forever,
+            daemon=True,
+            name="health-server",
+        )
+        self._health_thread.start()
+
+    def _stop_health_server(self) -> None:
+        """Stop the health check server and clean up socket file."""
+        if self._health_server is not None:
+            self._health_server.shutdown()
+            self._health_server.server_close()
+            self._health_server = None
+            self._health_thread = None
+
+        # Clean up socket file
+        socket_path = get_socket_path()
+        if socket_path.exists():
+            socket_path.unlink()
 
     def is_running(self) -> bool:
         """Check if scheduler is running."""
@@ -131,12 +428,12 @@ class SchedulerService:
         # Parse cron expression
         trigger = CronTrigger.from_crontab(task.cron_expression)
 
-        # Add job
+        # Add job using module-level function (picklable for SQLAlchemyJobStore)
         self._scheduler.add_job(
-            self._execute_task,
+            execute_scheduled_task,
             trigger=trigger,
             id=task.id,
-            args=[task.id],
+            args=[task.id, self._db_path],
             replace_existing=True,
         )
 
@@ -156,166 +453,13 @@ class SchedulerService:
         if not task:
             return None
 
-        # Execute directly (scheduler handles this)
-        return self._execute_task(task_id)
-
-    def _execute_task(self, task_id: str, attempt_number: int = 1) -> Optional[TaskRun]:
-        """Execute a scheduled task.
-
-        Args:
-            task_id: ID of the task to execute
-            attempt_number: Current attempt number (for retries)
-
-        Returns:
-            TaskRun record or None if task not found
-        """
-        task = self.db_client.get_task(task_id)
-        if not task:
-            return None
-
-        # Create run record
-        run = self.db_client.create_run(task_id, attempt_number)
-
-        # Send start notification
-        if self._notification_service:
-            self._notification_service.notify_start(task, run)
-
-        try:
-            # Execute Claude Code
-            result = self._invoke_claude(task)
-
-            # Update run with results
-            status = TaskStatus.COMPLETED if result["exit_code"] == 0 else TaskStatus.FAILED
-            run = self.db_client.update_run(
-                run.id,
-                status=status,
-                session_id=result.get("session_id"),
-                exit_code=result["exit_code"],
-                error_message=result.get("error"),
-                summary=result.get("summary"),
-                completed_at=datetime.utcnow(),
-            )
-
-            # Send notification
-            if self._notification_service:
-                if status == TaskStatus.COMPLETED:
-                    self._notification_service.notify_success(task, run)
-                else:
-                    self._notification_service.notify_error(task, run)
-
-            # Handle retry on failure
-            if status == TaskStatus.FAILED and attempt_number < task.max_retries:
-                self._schedule_retry(task, attempt_number + 1)
-
-        except Exception as e:
-            # Update run with error
-            run = self.db_client.update_run(
-                run.id,
-                status=TaskStatus.FAILED,
-                error_message=str(e),
-                completed_at=datetime.utcnow(),
-            )
-
-            # Send error notification
-            if self._notification_service:
-                self._notification_service.notify_error(task, run)
-
-            # Handle retry
-            if attempt_number < task.max_retries:
-                self._schedule_retry(task, attempt_number + 1)
-
-        return run
-
-    def _invoke_claude(self, task: ScheduledTask) -> dict:
-        """Invoke Claude Code CLI.
-
-        Args:
-            task: The task to execute
-
-        Returns:
-            Dict with exit_code, session_id, summary, error
-        """
-        cmd = [
-            "claude",
-            "--print",
-            "--model", task.model,
-            "--output-format", "json",
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                input=task.prompt,
-                capture_output=True,
-                text=True,
-                timeout=3600,  # 1 hour timeout
-                cwd=task.project_path,
-            )
-
-            # Try to parse session ID from output
-            session_id = self._extract_session_id(result.stdout)
-
-            # Generate summary from output (first 500 chars)
-            summary = self._generate_summary(result.stdout, result.stderr)
-
-            return {
-                "exit_code": result.returncode,
-                "session_id": session_id,
-                "summary": summary,
-                "error": result.stderr if result.returncode != 0 else None,
-            }
-
-        except subprocess.TimeoutExpired:
-            return {
-                "exit_code": -1,
-                "error": "Task execution timed out after 1 hour",
-            }
-        except Exception as e:
-            return {
-                "exit_code": -1,
-                "error": str(e),
-            }
-
-    def _extract_session_id(self, output: str) -> Optional[str]:
-        """Extract session ID from Claude output."""
-        # Look for session ID pattern in output
-        # Format varies but typically includes session identifier
-        match = re.search(r'session[_-]?id["\s:]+([a-f0-9-]+)', output, re.IGNORECASE)
-        if match:
-            return match.group(1)
-        return None
-
-    def _generate_summary(self, stdout: str, stderr: str) -> str:
-        """Generate a brief summary of the output."""
-        output = stdout or stderr or "No output"
-        # Take first 500 chars
-        if len(output) > 500:
-            return output[:500] + "..."
-        return output
-
-    def _schedule_retry(self, task: ScheduledTask, next_attempt: int) -> None:
-        """Schedule a retry with exponential backoff.
-
-        Args:
-            task: Task to retry
-            next_attempt: Attempt number for the retry
-        """
-        # Exponential backoff: 1min, 2min, 4min, 8min, etc.
-        delay_seconds = 60 * (2 ** (next_attempt - 1))
-
-        if self._scheduler is not None:
-            self._scheduler.add_job(
-                self._execute_task,
-                "date",
-                run_date=datetime.utcnow().timestamp() + delay_seconds,
-                id=f"{task.id}_retry_{next_attempt}",
-                args=[task.id, next_attempt],
-            )
+        # Execute directly using the standalone function
+        return execute_scheduled_task(task_id, self._db_path)
 
     def get_next_run_time(self, cron_expression: str) -> Optional[datetime]:
-        """Get next run time for a cron expression."""
+        """Get next run time for a cron expression (local time)."""
         try:
-            cron = croniter(cron_expression, datetime.utcnow())
+            cron = croniter(cron_expression, datetime.now())
             return cron.get_next(datetime)
         except Exception:
             return None
