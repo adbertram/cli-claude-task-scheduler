@@ -23,6 +23,21 @@ class RunStatus(str, Enum):
     TIMEOUT = "timeout"
 
 
+class TaskOutcome(str, Enum):
+    """Semantic outcome based on Claude's self-report.
+
+    This is separate from RunStatus:
+    - RunStatus: Process status (exit code) - did the process run without crashing?
+    - TaskOutcome: Semantic status (parsed from response) - did Claude accomplish the task?
+
+    A task can have RunStatus.SUCCESS (process ran) but TaskOutcome.FAILED (Claude couldn't complete).
+    """
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
 class TaskStatus(str, Enum):
     """Status of a scheduled task."""
 
@@ -189,6 +204,8 @@ class TaskRun(CLIModel):
     error_message: Optional[str] = None
     output: str
     attempt_number: int = 1
+    task_outcome: TaskOutcome = TaskOutcome.UNKNOWN
+    task_outcome_reason: Optional[str] = None
 
 
 class TaskRunDetail(TaskRun):

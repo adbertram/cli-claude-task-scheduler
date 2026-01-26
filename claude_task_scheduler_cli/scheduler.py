@@ -22,13 +22,62 @@ from croniter import croniter
 from .db_client import DatabaseClient
 from .health import get_socket_path
 from .logger import LoggerService
-from .models.task import ScheduledTask, TaskRun, RunStatus
+from .models.task import ScheduledTask, TaskRun, RunStatus, TaskOutcome
 from .notifications import NotificationService
 
 # Base prompt prepended to all scheduled tasks to enforce non-interactive behavior
-NON_INTERACTIVE_BASE_PROMPT = """You are in a non-interactive environment. If you are requested to perform any user-interactive task or if you need feedback in any way from the user, you must stop immediately and report it.
+BASE_PROMPT = """You are in a non-interactive environment. If you are requested to perform any user-interactive task or if you need feedback in any way from the user, you must stop immediately and report it.
+
+IMPORTANT: At the END of your response, you MUST include a task status marker:
+- If you completed the task: TASK_STATUS: SUCCESS
+- If you could not complete the task: TASK_STATUS: FAILED - brief reason
 
 """
+
+
+def parse_task_outcome(output: str) -> tuple[TaskOutcome, Optional[str]]:
+    """Parse TASK_STATUS marker from Claude's response.
+
+    Extracts the semantic task outcome from Claude's output. The marker can be:
+    - TASK_STATUS: SUCCESS
+    - TASK_STATUS: FAILED - reason
+
+    Args:
+        output: The raw output from Claude (may be JSON or plain text)
+
+    Returns:
+        Tuple of (TaskOutcome, reason). Reason is only present for FAILED status.
+    """
+    if not output:
+        return TaskOutcome.UNKNOWN, None
+
+    # Try to extract from JSON result if present (Claude's --output-format json)
+    try:
+        data = json.loads(output)
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("type") == "result":
+                    output = item.get("result", "")
+                    break
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Regex: TASK_STATUS: SUCCESS or TASK_STATUS: FAILED - reason
+    pattern = r'TASK_STATUS:\s*(SUCCESS|FAILED)(?:\s*-\s*(.+?))?(?:\n|$)'
+    match = re.search(pattern, output, re.IGNORECASE)
+
+    if not match:
+        return TaskOutcome.UNKNOWN, None
+
+    status = match.group(1).upper()
+    reason = match.group(2).strip() if match.group(2) else None
+
+    if status == "SUCCESS":
+        return TaskOutcome.SUCCESS, None
+    elif status == "FAILED":
+        return TaskOutcome.FAILED, reason
+
+    return TaskOutcome.UNKNOWN, None
 
 
 def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) -> Optional[TaskRun]:
@@ -75,6 +124,10 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             status = RunStatus.TIMEOUT
         else:
             status = RunStatus.FAILURE
+
+        # Parse semantic task outcome from Claude's response
+        task_outcome, task_outcome_reason = parse_task_outcome(result.get("output", ""))
+
         db_client.update_run(
             run.id,
             status=status,
@@ -83,12 +136,16 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             error_message=result.get("error"),
             output=result.get("output"),
             completed_at=datetime.utcnow(),
+            task_outcome=task_outcome,
+            task_outcome_reason=task_outcome_reason,
         )
         # Update local run object for logging/notifications
         run.status = status
         run.exit_code = result["exit_code"]
         run.error_message = result.get("error")
         run.output = result.get("output")
+        run.task_outcome = task_outcome
+        run.task_outcome_reason = task_outcome_reason
 
         # Log completion or failure
         if status == RunStatus.SUCCESS:
@@ -105,9 +162,14 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
                 stderr=result.get("stderr"),
             )
 
-        # Send notification
+        # Send notification based on both process status and semantic outcome
+        # A task that ran successfully (exit_code=0) but failed semantically should
+        # still trigger an error notification
         if status == RunStatus.SUCCESS:
-            notification_service.notify_success(task, run)
+            if task_outcome == TaskOutcome.FAILED:
+                notification_service.notify_error(task, run)  # Task failed semantically
+            else:
+                notification_service.notify_success(task, run)
         else:
             notification_service.notify_error(task, run)
 
@@ -123,11 +185,15 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             error_message=str(e),
             output=str(e),
             completed_at=datetime.utcnow(),
+            task_outcome=TaskOutcome.FAILED,
+            task_outcome_reason=str(e)[:200],
         )
         # Update local run object for logging/notifications
         run.status = RunStatus.FAILURE
         run.output = str(e)[:500]
         run.error_message = str(e)
+        run.task_outcome = TaskOutcome.FAILED
+        run.task_outcome_reason = str(e)[:200]
 
         # Log failure
         logger_service.log_task_failed(task, run, error=str(e))
@@ -161,7 +227,7 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
     ]
 
     # Prepend non-interactive base prompt to enforce explicit failure on user interaction
-    full_prompt = NON_INTERACTIVE_BASE_PROMPT + task.prompt
+    full_prompt = BASE_PROMPT + task.prompt
 
     # Log command execution
     logger_service.log_command_executed(task, run, cmd, task.project_path)

@@ -53,8 +53,8 @@ def list_runs(
     if table:
         print_table(
             runs,
-            ["id", "task_id", "status", "started_at", "completed_at", "attempt_number"],
-            ["Run ID", "Task ID", "Status", "Started", "Completed At", "Attempt"],
+            ["id", "task_id", "status", "task_outcome", "started_at", "completed_at", "attempt_number"],
+            ["Run ID", "Task ID", "Status", "Outcome", "Started", "Completed At", "Attempt"],
         )
     else:
         print_json(runs)
@@ -81,8 +81,8 @@ def get_run(
     if table:
         print_table(
             [run],
-            ["id", "task_id", "task_name", "status", "started_at", "completed_at", "session_id", "exit_code"],
-            ["Run ID", "Task ID", "Task Name", "Status", "Started", "Completed At", "Session ID", "Exit Code"],
+            ["id", "task_id", "task_name", "status", "task_outcome", "started_at", "completed_at", "session_id", "exit_code"],
+            ["Run ID", "Task ID", "Task Name", "Status", "Outcome", "Started", "Completed At", "Session ID", "Exit Code"],
         )
     else:
         print_json(run)

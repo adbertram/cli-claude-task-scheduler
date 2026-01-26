@@ -100,6 +100,8 @@ class TaskRunDB(Base):
     error_message = Column(Text, nullable=True)
     output = Column(Text, nullable=False)
     attempt_number = Column(Integer, default=1)
+    task_outcome = Column(String, nullable=False, default="unknown")  # success, failed, unknown
+    task_outcome_reason = Column(Text, nullable=True)
 
     # Relationships
     task = relationship("ScheduledTaskDB", back_populates="runs")
@@ -233,4 +235,35 @@ def init_db(engine=None):
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(engine)
+    _run_migrations(engine)
     return engine
+
+
+def _run_migrations(engine):
+    """Run database migrations for schema updates.
+
+    This handles adding new columns to existing tables without dropping data.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+
+    # Check if task_runs table exists
+    if "task_runs" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("task_runs")}
+
+        # Add task_outcome column if missing
+        if "task_outcome" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE task_runs ADD COLUMN task_outcome VARCHAR DEFAULT 'unknown' NOT NULL"
+                ))
+                conn.commit()
+
+        # Add task_outcome_reason column if missing
+        if "task_outcome_reason" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE task_runs ADD COLUMN task_outcome_reason TEXT"
+                ))
+                conn.commit()

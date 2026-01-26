@@ -43,6 +43,7 @@ from .models.task import (
     ScheduledTaskCreate,
     ScheduledTaskDetail,
     ScheduledTaskUpdate,
+    TaskOutcome,
     TaskRun,
     TaskRunDetail,
 )
@@ -345,6 +346,8 @@ class DatabaseClient:
         error_message: Optional[str] = None,
         output: Optional[str] = None,
         completed_at: Optional[datetime] = None,
+        task_outcome: Optional[TaskOutcome] = None,
+        task_outcome_reason: Optional[str] = None,
     ) -> Optional[TaskRun]:
         """Update a run."""
         session = self._get_session()
@@ -365,6 +368,10 @@ class DatabaseClient:
                 run_db.output = output
             if completed_at is not None:
                 run_db.completed_at = completed_at
+            if task_outcome is not None:
+                run_db.task_outcome = task_outcome.value
+            if task_outcome_reason is not None:
+                run_db.task_outcome_reason = task_outcome_reason
 
             session.commit()
             session.refresh(run_db)
@@ -467,6 +474,8 @@ class DatabaseClient:
             error_message=run_db.error_message,
             output=run_db.output,
             attempt_number=run_db.attempt_number,
+            task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
+            task_outcome_reason=run_db.task_outcome_reason,
         )
 
     def _run_db_to_detail(
@@ -486,6 +495,8 @@ class DatabaseClient:
             error_message=run_db.error_message,
             output=run_db.output,
             attempt_number=run_db.attempt_number,
+            task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
+            task_outcome_reason=run_db.task_outcome_reason,
             task_name=task_db.name if task_db else None,
         )
 
