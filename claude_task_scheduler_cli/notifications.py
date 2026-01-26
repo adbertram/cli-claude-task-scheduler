@@ -39,7 +39,7 @@ class NotificationService:
             run: The task run record
         """
         config = self._get_config(task)
-        if not config or NotificationEvent.START not in config.events:
+        if not config or NotificationEvent.RUNNING not in config.events:
             return
 
         message = self._format_start_message(task, run)
@@ -67,7 +67,7 @@ class NotificationService:
             run: The task run record
         """
         config = self._get_config(task)
-        if not config or NotificationEvent.ERROR not in config.events:
+        if not config or NotificationEvent.FAILURE not in config.events:
             return
 
         message = self._format_error_message(task, run)

@@ -92,13 +92,13 @@ class TaskRunDB(Base):
 
     id = Column(String, primary_key=True)
     task_id = Column(String, ForeignKey("scheduled_tasks.id"), nullable=False)
-    status = Column(String, nullable=False)  # pending, running, completed, failed
+    status = Column(String, nullable=False)  # running, success, failure, timeout
     started_at = Column(DateTime, nullable=False)
     completed_at = Column(DateTime, nullable=True)
     session_id = Column(String, nullable=True)
     exit_code = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
-    summary = Column(Text, nullable=True)
+    summary = Column(Text, nullable=False)
     attempt_number = Column(Integer, default=1)
 
     # Relationships
@@ -113,7 +113,7 @@ class NotificationConfigDB(Base):
 
     id = Column(String, primary_key=True)
     task_id = Column(String, ForeignKey("scheduled_tasks.id"), unique=True, nullable=False)
-    events_json = Column(Text, default='["start", "success", "error"]')
+    events_json = Column(Text, default='["running", "success", "failure"]')
 
     # Relationships
     task = relationship("ScheduledTaskDB", back_populates="notification_config")

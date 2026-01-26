@@ -434,7 +434,7 @@ def test_cli_update_timeout_validation():
 def test_scheduler_uses_task_timeout():
     """Scheduler should use task.timeout_seconds for subprocess timeout."""
     from claude_task_scheduler_cli.scheduler import _invoke_claude_standalone
-    from claude_task_scheduler_cli.models.task import ScheduledTask, TaskRun, TaskStatus
+    from claude_task_scheduler_cli.models.task import ScheduledTask, TaskRun, RunStatus
     from datetime import datetime
 
     task = ScheduledTask(
@@ -451,8 +451,9 @@ def test_scheduler_uses_task_timeout():
     run = TaskRun(
         id="run-id",
         task_id="test-id",
-        status=TaskStatus.RUNNING,
+        status=RunStatus.RUNNING,
         started_at=datetime.utcnow(),
+        summary="Test run in progress",
     )
     logger_service = MagicMock()
 
@@ -474,7 +475,7 @@ def test_scheduler_uses_task_timeout():
 def test_scheduler_timeout_error_message():
     """Timeout error should include actual timeout value."""
     from claude_task_scheduler_cli.scheduler import _invoke_claude_standalone
-    from claude_task_scheduler_cli.models.task import ScheduledTask, TaskRun, TaskStatus
+    from claude_task_scheduler_cli.models.task import ScheduledTask, TaskRun, RunStatus
     from datetime import datetime
     import subprocess
 
@@ -492,8 +493,9 @@ def test_scheduler_timeout_error_message():
     run = TaskRun(
         id="run-id",
         task_id="test-id",
-        status=TaskStatus.RUNNING,
+        status=RunStatus.RUNNING,
         started_at=datetime.utcnow(),
+        summary="Test run in progress",
     )
     logger_service = MagicMock()
 
@@ -972,7 +974,7 @@ class TestTimeoutE2E:
 
                 # The run should have failed with timeout error
                 latest_run = runs[0]
-                assert latest_run.status.value == "failed", f"Expected failed status, got {latest_run.status.value}. Summary: {latest_run.summary}"
+                assert latest_run.status.value == "timeout", f"Expected timeout status, got {latest_run.status.value}. Summary: {latest_run.summary}"
                 assert latest_run.error_message is not None, f"No error message. Summary: {latest_run.summary}"
                 assert "timed out" in latest_run.error_message.lower() or "timeout" in latest_run.error_message.lower(), \
                     f"Error message doesn't mention timeout: {latest_run.error_message}"

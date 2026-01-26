@@ -22,7 +22,7 @@ from croniter import croniter
 from .db_client import DatabaseClient
 from .health import get_socket_path
 from .logger import LoggerService
-from .models.task import ScheduledTask, TaskRun, TaskStatus
+from .models.task import ScheduledTask, TaskRun, RunStatus
 from .notifications import NotificationService
 
 
@@ -64,7 +64,12 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
         result = _invoke_claude_standalone(task, run, logger_service)
 
         # Update run with results
-        status = TaskStatus.COMPLETED if result["exit_code"] == 0 else TaskStatus.FAILED
+        if result["exit_code"] == 0:
+            status = RunStatus.SUCCESS
+        elif result.get("timed_out"):
+            status = RunStatus.TIMEOUT
+        else:
+            status = RunStatus.FAILURE
         db_client.update_run(
             run.id,
             status=status,
@@ -81,7 +86,7 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
         run.summary = result.get("summary")
 
         # Log completion or failure
-        if status == TaskStatus.COMPLETED:
+        if status == RunStatus.SUCCESS:
             logger_service.log_task_complete(
                 task, run,
                 stdout=result.get("stdout"),
@@ -96,25 +101,27 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             )
 
         # Send notification
-        if status == TaskStatus.COMPLETED:
+        if status == RunStatus.SUCCESS:
             notification_service.notify_success(task, run)
         else:
             notification_service.notify_error(task, run)
 
-        # Handle retry on failure
-        if status == TaskStatus.FAILED and attempt_number < task.max_retries:
+        # Handle retry on failure or timeout
+        if status in (RunStatus.FAILURE, RunStatus.TIMEOUT) and attempt_number < task.max_retries:
             _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
 
     except Exception as e:
         # Update run with error
         db_client.update_run(
             run.id,
-            status=TaskStatus.FAILED,
+            status=RunStatus.FAILURE,
             error_message=str(e),
+            summary=str(e)[:500],
             completed_at=datetime.utcnow(),
         )
         # Update local run object for logging/notifications
-        run.status = TaskStatus.FAILED
+        run.status = RunStatus.FAILURE
+        run.summary = str(e)[:500]
         run.error_message = str(e)
 
         # Log failure
@@ -176,8 +183,11 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
             session_id = match.group(1)
 
         # Generate summary from output (first 500 chars)
-        output = result.stdout or result.stderr or "No output"
-        summary = output[:500] + "..." if len(output) > 500 else output
+        output = result.stdout or result.stderr or ""
+        if not output:
+            summary = "Completed with no output" if result.returncode == 0 else "Failed with no output"
+        else:
+            summary = output[:500] + ("..." if len(output) > 500 else "")
 
         return {
             "exit_code": result.returncode,
@@ -189,18 +199,24 @@ def _invoke_claude_standalone(task: ScheduledTask, run: TaskRun, logger_service:
         }
 
     except subprocess.TimeoutExpired:
+        summary = f"Task execution timed out after {task.timeout_seconds} seconds"
         return {
             "exit_code": -1,
-            "error": f"Task execution timed out after {task.timeout_seconds} seconds",
+            "error": summary,
+            "summary": summary,
             "stdout": None,
             "stderr": None,
+            "timed_out": True,
         }
     except Exception as e:
+        error_msg = str(e)
         return {
             "exit_code": -1,
-            "error": str(e),
+            "error": error_msg,
+            "summary": error_msg[:500],
             "stdout": None,
             "stderr": None,
+            "timed_out": False,
         }
 
 
@@ -227,8 +243,16 @@ def _schedule_retry_standalone(
     Returns:
         Delay in seconds before retry
     """
-    # Exponential backoff: 1min, 2min, 4min, 8min, etc.
-    delay_seconds = 60 * (2 ** (next_attempt - 1))
+    # Smart backoff: exponential base, but cap at half the timeout for TIMEOUT status
+    base_delay = 60 * (2 ** (next_attempt - 1))
+
+    # If the last run timed out, cap retry delay at half the timeout duration
+    # This prevents waiting longer than the task itself takes to fail
+    if run.status == RunStatus.TIMEOUT:
+        max_delay = max(60, task.timeout_seconds // 2)
+        delay_seconds = min(base_delay, max_delay)
+    else:
+        delay_seconds = base_delay
 
     # Log the retry
     logger_service.log_task_retry(task, run, next_attempt, delay_seconds)

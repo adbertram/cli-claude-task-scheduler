@@ -5,7 +5,7 @@ from typing import Optional
 import typer
 
 from ..db_client import DatabaseClient
-from ..models.task import TaskStatus
+from ..models.task import RunStatus
 from ..output import print_error, print_json, print_success, print_table
 from ..scheduler import SchedulerService
 
@@ -25,7 +25,7 @@ def _get_scheduler() -> SchedulerService:
 @app.command("list")
 def list_runs(
     task_id: Optional[str] = typer.Option(None, "--task-id", "-t", help="Filter by task ID"),
-    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (pending, running, completed, failed)"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status (running, success, failure, timeout)"),
     limit: int = typer.Option(100, "--limit", "-l", help="Maximum number of results"),
     table: bool = typer.Option(False, "--table", help="Display as table"),
     filter: Optional[list[str]] = typer.Option(None, "--filter", "-f", help="Filter: field:op:value"),
@@ -38,9 +38,9 @@ def list_runs(
     status_filter = None
     if status:
         try:
-            status_filter = TaskStatus(status.lower())
+            status_filter = RunStatus(status.lower())
         except ValueError:
-            print_error(f"Invalid status: {status}. Valid values: pending, running, completed, failed")
+            print_error(f"Invalid status: {status}. Valid values: running, success, failure, timeout")
             raise typer.Exit(1)
 
     runs = db_client.list_runs(task_id=task_id, status=status_filter, limit=limit)
@@ -49,7 +49,7 @@ def list_runs(
         print_table(
             runs,
             ["id", "task_id", "status", "started_at", "completed_at", "attempt_number"],
-            ["Run ID", "Task ID", "Status", "Started", "Completed", "Attempt"],
+            ["Run ID", "Task ID", "Status", "Started", "Completed At", "Attempt"],
         )
     else:
         print_json(runs)
@@ -72,7 +72,7 @@ def get_run(
         print_table(
             [run],
             ["id", "task_id", "task_name", "status", "started_at", "completed_at", "session_id", "exit_code"],
-            ["Run ID", "Task ID", "Task Name", "Status", "Started", "Completed", "Session ID", "Exit Code"],
+            ["Run ID", "Task ID", "Task Name", "Status", "Started", "Completed At", "Session ID", "Exit Code"],
         )
     else:
         print_json(run)
@@ -93,8 +93,8 @@ def retry_run(
         print_error(f"Run not found: {run_id}")
         raise typer.Exit(1)
 
-    if run.status != TaskStatus.FAILED:
-        print_error(f"Can only retry failed runs. Current status: {run.status.value}")
+    if run.status not in (RunStatus.FAILURE, RunStatus.TIMEOUT):
+        print_error(f"Can only retry failed or timed-out runs. Current status: {run.status.value}")
         raise typer.Exit(1)
 
     # Get the task

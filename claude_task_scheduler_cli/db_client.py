@@ -38,13 +38,13 @@ from .models.notification import (
 from .models.task import (
     NotificationConfig,
     NotificationEvent,
+    RunStatus,
     ScheduledTask,
     ScheduledTaskCreate,
     ScheduledTaskDetail,
     ScheduledTaskUpdate,
     TaskRun,
     TaskRunDetail,
-    TaskStatus,
 )
 
 
@@ -291,9 +291,10 @@ class DatabaseClient:
             run_db = TaskRunDB(
                 id=run_id,
                 task_id=task_id,
-                status=TaskStatus.RUNNING.value,
+                status=RunStatus.RUNNING.value,
                 started_at=now,
                 attempt_number=attempt_number,
+                summary="Task execution in progress...",
             )
             session.add(run_db)
             session.commit()
@@ -318,7 +319,7 @@ class DatabaseClient:
     def list_runs(
         self,
         task_id: Optional[str] = None,
-        status: Optional[TaskStatus] = None,
+        status: Optional[RunStatus] = None,
         limit: int = 100,
     ) -> list[TaskRun]:
         """List runs with optional filters."""
@@ -338,7 +339,7 @@ class DatabaseClient:
     def update_run(
         self,
         run_id: str,
-        status: Optional[TaskStatus] = None,
+        status: Optional[RunStatus] = None,
         session_id: Optional[str] = None,
         exit_code: Optional[int] = None,
         error_message: Optional[str] = None,
@@ -376,7 +377,7 @@ class DatabaseClient:
         """Get all runs with RUNNING status (for resume on restart)."""
         session = self._get_session()
         try:
-            runs_db = session.query(TaskRunDB).filter_by(status=TaskStatus.RUNNING.value).all()
+            runs_db = session.query(TaskRunDB).filter_by(status=RunStatus.RUNNING.value).all()
             return [self._run_db_to_model(r) for r in runs_db]
         finally:
             session.close()
@@ -458,7 +459,7 @@ class DatabaseClient:
         return TaskRun(
             id=run_db.id,
             task_id=run_db.task_id,
-            status=TaskStatus(run_db.status),
+            status=RunStatus(run_db.status),
             started_at=run_db.started_at,
             completed_at=run_db.completed_at,
             session_id=run_db.session_id,
@@ -477,7 +478,7 @@ class DatabaseClient:
         return TaskRunDetail(
             id=run_db.id,
             task_id=run_db.task_id,
-            status=TaskStatus(run_db.status),
+            status=RunStatus(run_db.status),
             started_at=run_db.started_at,
             completed_at=run_db.completed_at,
             session_id=run_db.session_id,

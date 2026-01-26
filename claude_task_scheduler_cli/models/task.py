@@ -14,21 +14,28 @@ from .notification import (
 )
 
 
-class TaskStatus(str, Enum):
+class RunStatus(str, Enum):
     """Status of a task run."""
 
-    PENDING = "pending"
     RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
+    SUCCESS = "success"
+    FAILURE = "failure"
+    TIMEOUT = "timeout"
+
+
+class TaskStatus(str, Enum):
+    """Status of a scheduled task."""
+
+    ENABLED = "enabled"
+    DISABLED = "disabled"
 
 
 class NotificationEvent(str, Enum):
     """Events that trigger notifications."""
 
-    START = "start"
+    RUNNING = "running"
     SUCCESS = "success"
-    ERROR = "error"
+    FAILURE = "failure"
 
 
 class NotificationConfig(CLIModel):
@@ -44,7 +51,7 @@ class NotificationConfig(CLIModel):
     id: str = Field(frozen=True)
     task_id: str = Field(frozen=True)
     events: list[NotificationEvent] = Field(
-        default=[NotificationEvent.START, NotificationEvent.SUCCESS, NotificationEvent.ERROR]
+        default=[NotificationEvent.RUNNING, NotificationEvent.SUCCESS, NotificationEvent.FAILURE]
     )
     slack_channels: list[SlackNotificationChannel] = Field(default_factory=list)
     gmail_channels: list[GmailNotificationChannel] = Field(default_factory=list)
@@ -140,7 +147,7 @@ class ScheduledTaskCreate(CLIModel):
     timeout_seconds: int = 3600
     enabled: bool = True
     notification_events: list[NotificationEvent] = Field(
-        default=[NotificationEvent.START, NotificationEvent.SUCCESS, NotificationEvent.ERROR]
+        default=[NotificationEvent.RUNNING, NotificationEvent.SUCCESS, NotificationEvent.FAILURE]
     )
     slack_channel_ids: list[str] = Field(default_factory=list)
     gmail_channel_ids: list[str] = Field(default_factory=list)
@@ -174,13 +181,13 @@ class TaskRun(CLIModel):
 
     id: str = Field(frozen=True)
     task_id: str = Field(frozen=True)
-    status: TaskStatus
+    status: RunStatus
     started_at: datetime = Field(frozen=True)
     completed_at: Optional[datetime] = None
     session_id: Optional[str] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
-    summary: Optional[str] = None
+    summary: str
     attempt_number: int = 1
 
 
