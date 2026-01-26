@@ -51,7 +51,7 @@ class ScheduledTaskDB(Base):
     name = Column(String, nullable=False)
     prompt = Column(Text, nullable=False)
     project_path = Column(String, nullable=False)
-    cron_expression = Column(String, nullable=False)
+    cron_expression = Column(String, nullable=True)  # Optional - tasks without schedule can be triggered manually
     model = Column(String, nullable=False)
     max_retries = Column(Integer, default=3)
     timeout_seconds = Column(Integer, default=3600)

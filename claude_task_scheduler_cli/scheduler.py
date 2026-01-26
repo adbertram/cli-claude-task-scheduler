@@ -513,14 +513,25 @@ class SchedulerService:
         return next_runs
 
     def _load_enabled_tasks(self) -> None:
-        """Load all enabled tasks into the scheduler."""
+        """Load all enabled tasks with schedules into the scheduler.
+
+        Tasks without cron expressions are skipped - they can only be run manually.
+        """
         tasks = self.db_client.list_tasks(enabled_only=True)
         for task in tasks:
-            self.add_job(task)
+            if task.cron_expression:
+                self.add_job(task)
 
     def add_job(self, task: ScheduledTask) -> None:
-        """Add a task to the scheduler."""
+        """Add a task to the scheduler.
+
+        Tasks without a cron expression are skipped - they can only be run manually.
+        """
         if self._scheduler is None:
+            return
+
+        # Skip tasks without schedules - they can only be run manually
+        if not task.cron_expression:
             return
 
         # Remove existing job if present
@@ -560,16 +571,26 @@ class SchedulerService:
         # Execute directly using the standalone function
         return execute_scheduled_task(task_id, self._db_path)
 
-    def get_next_run_time(self, cron_expression: str) -> Optional[datetime]:
-        """Get next run time for a cron expression (local time)."""
+    def get_next_run_time(self, cron_expression: Optional[str]) -> Optional[datetime]:
+        """Get next run time for a cron expression (local time).
+
+        Returns None if cron_expression is None or invalid.
+        """
+        if not cron_expression:
+            return None
         try:
             cron = croniter(cron_expression, datetime.now())
             return cron.get_next(datetime)
         except Exception:
             return None
 
-    def validate_cron(self, cron_expression: str) -> bool:
-        """Validate a cron expression."""
+    def validate_cron(self, cron_expression: Optional[str]) -> bool:
+        """Validate a cron expression.
+
+        Returns False if cron_expression is None or invalid.
+        """
+        if not cron_expression:
+            return False
         try:
             croniter(cron_expression)
             return True

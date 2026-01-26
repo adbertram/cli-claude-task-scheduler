@@ -80,7 +80,7 @@ class ScheduledTask(CLIModel):
     name: str
     prompt: str
     project_path: str
-    cron_expression: str
+    cron_expression: Optional[str] = None
     model: str
     max_retries: int = 3
     timeout_seconds: int = 3600
@@ -151,12 +151,14 @@ class ScheduledTaskCreate(CLIModel):
     Channels are standalone entities that are assigned by ID.
     Create channels first via 'channels slack create', 'channels gmail create',
     or 'channels macos create', then assign them to tasks by ID.
+
+    Tasks can be created without a schedule and updated later.
     """
 
     name: str
     prompt: str
     project_path: str
-    cron_expression: str
+    cron_expression: Optional[str] = None
     model: str
     max_retries: int = 3
     timeout_seconds: int = 3600

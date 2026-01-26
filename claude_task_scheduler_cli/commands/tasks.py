@@ -138,7 +138,7 @@ def create_task(
     name: str = typer.Option(..., "--name", "-n", help="Task name"),
     prompt: str = typer.Option(..., "--prompt", "-p", help="Claude Code prompt to execute"),
     project: str = typer.Option(..., "--project", "-d", help="Project directory path"),
-    cron: str = typer.Option(..., "--cron", "-c", help="Cron expression (e.g., '0 9 * * *')"),
+    cron: Optional[str] = typer.Option(None, "--cron", "-c", help="Cron expression (e.g., '0 9 * * *')"),
     model: str = typer.Option(..., "--model", "-m", help="Claude model (e.g., 'opus', 'sonnet')"),
     max_retries: int = typer.Option(3, "--max-retries", "-r", help="Maximum retry attempts"),
     timeout: int = typer.Option(3600, "--timeout", "-T", help="Execution timeout in seconds (60-86400)"),
@@ -152,19 +152,22 @@ def create_task(
 ):
     """Create a new scheduled task.
 
+    Tasks can be created without a schedule and updated later with 'tasks update --cron'.
+    Tasks without a schedule can only be run manually via 'tasks trigger'.
+
     Use --notification-channels to specify which notification types to use.
     Default channels for each type will be automatically assigned.
 
     Examples:
+        claude-task-scheduler tasks create -n "My Task" -p "Do something" -d /path -m opus
+        claude-task-scheduler tasks create -n "Scheduled" -p "Do it" -d /path -m opus -c "0 9 * * *"
         --notification-channels slack,macos
-        --notification-channels gmail
-        --notification-channels slack,gmail,macos
     """
     db_client = _get_db_client()
     scheduler = _get_scheduler()
 
-    # Validate cron expression
-    if not scheduler.validate_cron(cron):
+    # Validate cron expression if provided
+    if cron and not scheduler.validate_cron(cron):
         print_error(f"Invalid cron expression: {cron}")
         raise typer.Exit(1)
 
@@ -206,13 +209,21 @@ def create_task(
 
     print_success(f"Task '{name}' created successfully")
 
-    # Check daemon health and warn if not running
-    health = check_daemon_health()
-    if not health.get("running"):
+    # Warn if no schedule set
+    if not cron:
         print_warning(
-            "Daemon is not running. Task will not execute until daemon is started.\n"
-            "Run: claude-task-scheduler daemon start"
+            "Task created without a schedule. It can only be run manually via:\n"
+            "  claude-task-scheduler tasks trigger <task-id>\n"
+            "To add a schedule: claude-task-scheduler tasks update <task-id> --cron '0 9 * * *'"
         )
+    else:
+        # Check daemon health and warn if not running
+        health = check_daemon_health()
+        if not health.get("running"):
+            print_warning(
+                "Daemon is not running. Task will not execute until daemon is started.\n"
+                "Run: claude-task-scheduler daemon start"
+            )
 
 
 @app.command("list")
@@ -232,7 +243,7 @@ def list_tasks(
     # Build output with notification channels summary
     output = []
     for task in tasks:
-        if task.enabled:
+        if task.enabled and task.cron_expression:
             next_run = scheduler.get_next_run_time(task.cron_expression)
             task.next_run_at = next_run
 
@@ -248,7 +259,7 @@ def list_tasks(
 
         task_dict = task.model_dump()
         task_dict["notification_channels"] = ", ".join(channels) if channels else "none"
-        task_dict["schedule_friendly"] = _cron_to_friendly(task.cron_expression)
+        task_dict["schedule_friendly"] = _cron_to_friendly(task.cron_expression) if task.cron_expression else "manual only"
         task_dict["total_runs"] = db_client.count_runs(task.id)
         output.append(task_dict)
 
@@ -276,8 +287,8 @@ def get_task(
         print_error(f"Task not found: {task_id}")
         raise typer.Exit(1)
 
-    # Add next run time
-    if task.enabled:
+    # Add next run time if task has a schedule
+    if task.enabled and task.cron_expression:
         task.next_run_at = scheduler.get_next_run_time(task.cron_expression)
 
     if table:
