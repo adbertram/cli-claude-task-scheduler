@@ -1,0 +1,372 @@
+"""Task management commands."""
+
+from typing import Optional
+
+import typer
+
+from ..db_client import DatabaseClient
+from ..models.task import (
+    NotificationEvent,
+    ScheduledTaskCreate,
+    ScheduledTaskUpdate,
+)
+from ..output import print_error, print_json, print_success, print_table
+from ..scheduler import SchedulerService
+
+app = typer.Typer(help="Manage scheduled tasks", no_args_is_help=True)
+
+VALID_CHANNEL_TYPES = {"slack", "gmail", "macos"}
+
+
+def _get_db_client() -> DatabaseClient:
+    """Get database client."""
+    return DatabaseClient()
+
+
+def _get_scheduler() -> SchedulerService:
+    """Get scheduler service."""
+    return SchedulerService()
+
+
+def _parse_notification_channels(
+    channels: Optional[str], db_client: "DatabaseClient"
+) -> tuple[list[str], list[str], list[str]]:
+    """Parse notification channel types and return default channel IDs for each type.
+
+    Args:
+        channels: Comma-separated channel types (slack, gmail, macos)
+        db_client: Database client for fetching default channels
+
+    Returns:
+        Tuple of (slack_channel_ids, gmail_channel_ids, macos_channel_ids)
+    """
+    slack_ids = []
+    gmail_ids = []
+    macos_ids = []
+
+    if not channels:
+        return slack_ids, gmail_ids, macos_ids
+
+    for channel_type in channels.split(","):
+        channel_type = channel_type.strip().lower()
+        if not channel_type:
+            continue
+
+        if channel_type not in VALID_CHANNEL_TYPES:
+            print_error(f"Invalid channel type: {channel_type}. Valid types: {', '.join(sorted(VALID_CHANNEL_TYPES))}")
+            raise typer.Exit(1)
+
+        if channel_type == "slack":
+            defaults = db_client.get_default_slack_channels()
+            slack_ids.extend([ch.id for ch in defaults])
+        elif channel_type == "gmail":
+            defaults = db_client.get_default_gmail_channels()
+            gmail_ids.extend([ch.id for ch in defaults])
+        elif channel_type == "macos":
+            defaults = db_client.get_default_macos_channels()
+            macos_ids.extend([ch.id for ch in defaults])
+
+    return slack_ids, gmail_ids, macos_ids
+
+
+@app.command("create")
+def create_task(
+    name: str = typer.Option(..., "--name", "-n", help="Task name"),
+    prompt: str = typer.Option(..., "--prompt", "-p", help="Claude Code prompt to execute"),
+    project: str = typer.Option(..., "--project", "-d", help="Project directory path"),
+    cron: str = typer.Option(..., "--cron", "-c", help="Cron expression (e.g., '0 9 * * *')"),
+    model: str = typer.Option(..., "--model", "-m", help="Claude model (e.g., 'opus', 'sonnet')"),
+    max_retries: int = typer.Option(3, "--max-retries", "-r", help="Maximum retry attempts"),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Enable task immediately"),
+    notification_channels: Optional[str] = typer.Option(
+        None,
+        "--notification-channels", "-N",
+        help="Channel types: slack, gmail, macos (comma-separated, uses default channels)",
+    ),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Create a new scheduled task.
+
+    Use --notification-channels to specify which notification types to use.
+    Default channels for each type will be automatically assigned.
+
+    Examples:
+        --notification-channels slack,macos
+        --notification-channels gmail
+        --notification-channels slack,gmail,macos
+    """
+    db_client = _get_db_client()
+    scheduler = _get_scheduler()
+
+    # Validate cron expression
+    if not scheduler.validate_cron(cron):
+        print_error(f"Invalid cron expression: {cron}")
+        raise typer.Exit(1)
+
+    # Parse channel types and get default channel IDs
+    slack_channel_ids, gmail_channel_ids, macos_channel_ids = _parse_notification_channels(
+        notification_channels, db_client
+    )
+
+    # Create task
+    task_data = ScheduledTaskCreate(
+        name=name,
+        prompt=prompt,
+        project_path=project,
+        cron_expression=cron,
+        model=model,
+        max_retries=max_retries,
+        enabled=enabled,
+        slack_channel_ids=slack_channel_ids,
+        gmail_channel_ids=gmail_channel_ids,
+        macos_channel_ids=macos_channel_ids,
+    )
+
+    task = db_client.create_task(task_data)
+
+    if table:
+        print_table(
+            [task],
+            ["id", "name", "cron_expression", "model", "enabled"],
+            ["ID", "Name", "Schedule", "Model", "Enabled"],
+        )
+    else:
+        print_json(task)
+
+    print_success(f"Task '{name}' created successfully")
+
+
+@app.command("list")
+def list_tasks(
+    enabled_only: bool = typer.Option(False, "--enabled", "-e", help="Show only enabled tasks"),
+    limit: int = typer.Option(100, "--limit", "-l", help="Maximum number of results"),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+    filter: Optional[list[str]] = typer.Option(None, "--filter", "-f", help="Filter: field:op:value"),
+    properties: Optional[str] = typer.Option(None, "--properties", "-p", help="Comma-separated list of fields"),
+):
+    """List all scheduled tasks."""
+    db_client = _get_db_client()
+    scheduler = _get_scheduler()
+
+    tasks = db_client.list_tasks(enabled_only=enabled_only, limit=limit)
+
+    # Add next run time to each task
+    for task in tasks:
+        if task.enabled:
+            next_run = scheduler.get_next_run_time(task.cron_expression)
+            task.next_run_at = next_run
+
+    if table:
+        print_table(
+            tasks,
+            ["id", "name", "cron_expression", "model", "enabled", "next_run_at"],
+            ["ID", "Name", "Schedule", "Model", "Enabled", "Next Run"],
+        )
+    else:
+        print_json(tasks)
+
+
+@app.command("get")
+def get_task(
+    task_id: str = typer.Argument(..., help="Task ID"),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Get a specific task by ID."""
+    db_client = _get_db_client()
+    scheduler = _get_scheduler()
+
+    task = db_client.get_task(task_id)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    # Add next run time
+    if task.enabled:
+        task.next_run_at = scheduler.get_next_run_time(task.cron_expression)
+
+    if table:
+        print_table(
+            [task],
+            ["id", "name", "prompt", "project_path", "cron_expression", "model", "enabled"],
+            ["ID", "Name", "Prompt", "Project", "Schedule", "Model", "Enabled"],
+        )
+    else:
+        print_json(task)
+
+
+@app.command("update")
+def update_task(
+    task_id: str = typer.Argument(..., help="Task ID"),
+    name: Optional[str] = typer.Option(None, "--name", "-n", help="Task name"),
+    prompt: Optional[str] = typer.Option(None, "--prompt", "-p", help="Claude Code prompt"),
+    project: Optional[str] = typer.Option(None, "--project", "-d", help="Project directory path"),
+    cron: Optional[str] = typer.Option(None, "--cron", "-c", help="Cron expression"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Claude model"),
+    max_retries: Optional[int] = typer.Option(None, "--max-retries", "-r", help="Maximum retry attempts"),
+    notification_channels: Optional[str] = typer.Option(
+        None,
+        "--notification-channels", "-N",
+        help="Channel types: slack, gmail, macos (comma-separated, replaces existing)",
+    ),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Update a scheduled task.
+
+    Use --notification-channels to specify which notification types to use.
+    Default channels for each type will be automatically assigned.
+    This replaces any existing notification channel assignments.
+
+    Examples:
+        --notification-channels slack,macos
+        --notification-channels gmail
+        --notification-channels slack,gmail,macos
+    """
+    db_client = _get_db_client()
+    scheduler = _get_scheduler()
+
+    # Validate cron if provided
+    if cron and not scheduler.validate_cron(cron):
+        print_error(f"Invalid cron expression: {cron}")
+        raise typer.Exit(1)
+
+    # Parse channel types if provided
+    slack_channel_ids = None
+    gmail_channel_ids = None
+    macos_channel_ids = None
+
+    if notification_channels is not None:
+        slack_channel_ids, gmail_channel_ids, macos_channel_ids = _parse_notification_channels(
+            notification_channels, db_client
+        )
+
+    update_data = ScheduledTaskUpdate(
+        name=name,
+        prompt=prompt,
+        project_path=project,
+        cron_expression=cron,
+        model=model,
+        max_retries=max_retries,
+        slack_channel_ids=slack_channel_ids,
+        gmail_channel_ids=gmail_channel_ids,
+        macos_channel_ids=macos_channel_ids,
+    )
+
+    task = db_client.update_task(task_id, update_data)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    if table:
+        print_table(
+            [task],
+            ["id", "name", "cron_expression", "model", "enabled"],
+            ["ID", "Name", "Schedule", "Model", "Enabled"],
+        )
+    else:
+        print_json(task)
+
+    print_success(f"Task '{task.name}' updated successfully")
+
+
+@app.command("delete")
+def delete_task(
+    task_id: str = typer.Argument(..., help="Task ID"),
+    force: bool = typer.Option(False, "--force", "-F", help="Skip confirmation"),
+):
+    """Delete a scheduled task."""
+    db_client = _get_db_client()
+
+    task = db_client.get_task(task_id)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    if not force:
+        confirm = typer.confirm(f"Delete task '{task.name}'?")
+        if not confirm:
+            raise typer.Abort()
+
+    db_client.delete_task(task_id)
+    print_success(f"Task '{task.name}' deleted successfully")
+
+
+@app.command("enable")
+def enable_task(
+    task_id: str = typer.Argument(..., help="Task ID"),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Enable a scheduled task."""
+    db_client = _get_db_client()
+
+    task = db_client.enable_task(task_id)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    if table:
+        print_table(
+            [task],
+            ["id", "name", "enabled"],
+            ["ID", "Name", "Enabled"],
+        )
+    else:
+        print_json(task)
+
+    print_success(f"Task '{task.name}' enabled")
+
+
+@app.command("disable")
+def disable_task(
+    task_id: str = typer.Argument(..., help="Task ID"),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Disable a scheduled task."""
+    db_client = _get_db_client()
+
+    task = db_client.disable_task(task_id)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    if table:
+        print_table(
+            [task],
+            ["id", "name", "enabled"],
+            ["ID", "Name", "Enabled"],
+        )
+    else:
+        print_json(task)
+
+    print_success(f"Task '{task.name}' disabled")
+
+
+@app.command("trigger")
+def trigger_task(
+    task_id: str = typer.Argument(..., help="Task ID to trigger"),
+    table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
+):
+    """Trigger a task to run immediately."""
+    db_client = _get_db_client()
+    scheduler = _get_scheduler()
+
+    task = db_client.get_task(task_id)
+    if not task:
+        print_error(f"Task not found: {task_id}")
+        raise typer.Exit(1)
+
+    # Execute the task
+    run = scheduler.run_job_now(task_id)
+    if not run:
+        print_error("Failed to trigger task")
+        raise typer.Exit(1)
+
+    if table:
+        print_table(
+            [run],
+            ["id", "task_id", "status", "started_at", "session_id"],
+            ["Run ID", "Task ID", "Status", "Started", "Session ID"],
+        )
+    else:
+        print_json(run)
+
+    print_success(f"Task '{task.name}' triggered successfully")

@@ -1,6 +1,14 @@
-# ClaudeTaskScheduler CLI
+# Claude Task Scheduler
 
-A command-line interface for the [ClaudeTaskScheduler API](local://scheduler). Schedule and execute Claude Code prompts with auto-resume, notifications, and logging
+A command-line tool for scheduling and executing Claude Code prompts with auto-resume, notifications, and logging.
+
+## Features
+
+- **Cron Scheduling**: Schedule Claude Code prompts using cron expressions
+- **Auto-Retry**: Automatic retry with exponential backoff on failure
+- **Notifications**: Send notifications via Slack, email, and macOS desktop notifications on task events
+- **Session Tracking**: Track Claude Code session IDs for debugging
+- **Docker Ready**: Run as a daemon in a Docker container
 
 ## Installation
 
@@ -9,100 +17,220 @@ cd claude-task-scheduler
 pip install -e .
 ```
 
-After installation, the `claude-task-scheduler` command will be available in your terminal.
+After installation, the `claude-task-scheduler` command will be available.
 
 ## Quick Start
 
 ```bash
-# Authenticate with ClaudeTaskScheduler
-claude-task-scheduler auth login
+# Create a scheduled task
+claude-task-scheduler tasks create \
+  --name "Daily Report" \
+  --prompt "Generate the daily sales report and save to /reports" \
+  --project ~/projects/my-project \
+  --cron "0 9 * * *" \
+  --model opus
 
-# List items
-claude-task-scheduler items list
+# List all tasks
+claude-task-scheduler tasks list --table
 
-# Get a specific item
-claude-task-scheduler items get ITEM_ID
+# Start the scheduler daemon
+claude-task-scheduler daemon start
 ```
 
 ## Commands
 
-### Authentication
+### Tasks
+
+Manage scheduled tasks (create, list, get, update, delete, enable, disable, trigger).
 
 ```bash
-# Login with API key
-claude-task-scheduler auth login
-claude-task-scheduler auth login --api-key YOUR_API_KEY
+# Create a task
+claude-task-scheduler tasks create \
+  --name "My Task" \
+  --prompt "Your prompt here" \
+  --project /path/to/project \
+  --cron "0 9 * * *" \
+  --model opus \
+  --max-retries 3 \
+  --notification-channels slack,macos
 
-# Check authentication status
-claude-task-scheduler auth status
-claude-task-scheduler auth status
+# List tasks
+claude-task-scheduler tasks list
+claude-task-scheduler tasks list --table
+claude-task-scheduler tasks list --enabled
 
-# Clear stored credentials
-claude-task-scheduler auth logout
+# Get task details
+claude-task-scheduler tasks get TASK_ID
+
+# Update a task
+claude-task-scheduler tasks update TASK_ID --name "New Name" --cron "0 10 * * *"
+
+# Enable/disable a task
+claude-task-scheduler tasks enable TASK_ID
+claude-task-scheduler tasks disable TASK_ID
+
+# Trigger a task to run immediately
+claude-task-scheduler tasks trigger TASK_ID
+
+# Delete a task
+claude-task-scheduler tasks delete TASK_ID
+claude-task-scheduler tasks delete TASK_ID --force
 ```
 
-### Items
+### Runs
+
+View task execution history.
 
 ```bash
-# List all items (JSON output)
-claude-task-scheduler items list
+# List all runs
+claude-task-scheduler runs list
+claude-task-scheduler runs list --table
 
-# List items with table format
-claude-task-scheduler items list
+# Filter by task
+claude-task-scheduler runs list --task-id TASK_ID
 
-# Limit results
-claude-task-scheduler items list --limit 10
+# Filter by status
+claude-task-scheduler runs list --status failed
 
-# Get a specific item
-claude-task-scheduler items get ITEM_ID
-claude-task-scheduler items get ITEM_ID
+# Get run details
+claude-task-scheduler runs get RUN_ID
+
+# Retry a failed run
+claude-task-scheduler runs retry RUN_ID
 ```
+
+### Daemon
+
+Control the scheduler daemon.
+
+```bash
+# Start the daemon (foreground)
+claude-task-scheduler daemon start
+
+# Check status
+claude-task-scheduler daemon status
+claude-task-scheduler daemon status --table
+
+# Stop info
+claude-task-scheduler daemon stop
+```
+
+## Cron Expression Examples
+
+| Expression | Description |
+|------------|-------------|
+| `0 9 * * *` | Every day at 9 AM |
+| `0 9 * * 1-5` | Weekdays at 9 AM |
+| `*/30 * * * *` | Every 30 minutes |
+| `0 0 1 * *` | First of every month at midnight |
+| `0 8,12,18 * * *` | At 8 AM, 12 PM, and 6 PM daily |
+
+## Notifications
+
+Tasks can send notifications via Slack, email, and macOS desktop notifications when:
+- **start**: Task execution begins
+- **success**: Task completes successfully
+- **error**: Task fails
+
+### Notification Channels
+
+Channels are standalone entities that you create once and assign to tasks by ID.
+
+```bash
+# Create notification channels
+claude-task-scheduler channels slack create --name "Dev Alerts" --default
+claude-task-scheduler channels gmail create --email "admin@example.com" --default
+claude-task-scheduler channels macos create --sound default --default
+
+# List channels
+claude-task-scheduler channels slack list --table
+claude-task-scheduler channels gmail list --table
+claude-task-scheduler channels macos list --table
+```
+
+### Assigning Channels to Tasks
+
+Use `--notification-channels` (or `-N`) with a comma-separated list of channel types. Default channels for each type are automatically assigned:
+
+```bash
+# Use default channels for multiple types
+claude-task-scheduler tasks create \
+  --name "Important Task" \
+  --prompt "..." \
+  --project /path \
+  --cron "0 9 * * *" \
+  --model opus \
+  --notification-channels slack,gmail,macos
+
+# Just Slack and macOS desktop notifications
+claude-task-scheduler tasks create \
+  --name "Another Task" \
+  --prompt "..." \
+  --project /path \
+  --cron "0 9 * * *" \
+  --model opus \
+  -N slack,macos
+```
+
+**Valid channel types:** `slack`, `gmail`, `macos`
+
+**Requirements:**
+- `slack` - Slack notifications require the `slack` CLI to be installed and authenticated
+- `gmail` - Email notifications require the `google` CLI to be installed and authenticated
+- `macos` - Desktop notifications require the `notifier` CLI (terminal-notifier wrapper, macOS only)
+
+## Docker Deployment
+
+Build and run the scheduler as a Docker container:
+
+```bash
+# Build the image
+docker-compose build
+
+# Start the daemon
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Docker Volumes
+
+| Volume | Purpose |
+|--------|---------|
+| `/data` | SQLite database (persistent) |
+| `/home/scheduler/.claude` | Claude Code config (mount from host) |
+| `/projects` | Project directories for task execution |
+
+### Environment Variables
+
+```bash
+ANTHROPIC_API_KEY=<your-api-key>  # Required for Claude Code
+CLAUDE_DEFAULT_MODEL=opus         # Optional default model
+```
+
+## Data Storage
+
+Tasks and runs are stored in SQLite at `~/.claude-task-scheduler/scheduler.db`.
+
+To view task run output, use the `claude-code-sessions` CLI with the session ID from the run record.
 
 ## Output Formats
 
 All commands support two output formats:
 
-- **JSON** (default): Machine-readable output for scripting and piping
-
-### JSON Output Example
-
-```bash
-claude-task-scheduler items list --limit 2
-```
-
-### Table Output Example
+- **JSON** (default): Machine-readable for scripting
+- **Table** (`--table`): Human-readable format
 
 ```bash
-claude-task-scheduler items list --limit 5
-```
+# JSON output (default)
+claude-task-scheduler tasks list
 
-## Options Reference
-
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--limit` | `-l` | Maximum number of results (default: 50) |
-| `--offset` | `-o` | Offset for pagination |
-| `--version` | `-v` | Show version and exit |
-
-## Configuration
-
-Credentials are stored in a `.env` file in the package directory:
-
-```bash
-# API Key
-CLAUDE_TASK_SCHEDULER_API_KEY=your_api_key
-
-# Or OAuth credentials
-CLAUDE_TASK_SCHEDULER_CLIENT_ID=your_client_id
-CLAUDE_TASK_SCHEDULER_CLIENT_SECRET=your_client_secret
-
-# OAuth tokens (managed automatically after login)
-CLAUDE_TASK_SCHEDULER_ACCESS_TOKEN=<access_token>
-CLAUDE_TASK_SCHEDULER_REFRESH_TOKEN=<refresh_token>
-CLAUDE_TASK_SCHEDULER_TOKEN_EXPIRES_AT=<timestamp>
-
-# Optional: API base URL
-CLAUDE_TASK_SCHEDULER_BASE_URL=local://scheduler
+# Table output
+claude-task-scheduler tasks list --table
 ```
 
 ## Exit Codes
@@ -111,121 +239,13 @@ CLAUDE_TASK_SCHEDULER_BASE_URL=local://scheduler
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 2 | Authentication/credential error |
 | 130 | User interrupted (Ctrl+C) |
-
-## Examples
-
-### List Items and Filter with jq
-
-```bash
-claude-task-scheduler items list | jq '.items[].id'
-```
-
-### Export Items to JSON File
-
-```bash
-claude-task-scheduler items list --limit 200 > items.json
-```
-
-## Models
-
-This CLI uses Pydantic models for type-safe data handling. All commands return strongly-typed models.
-
-### Available Models
-
-| Model | Description | Required Fields |
-|-------|-------------|-----------------|
-| `Item` | Base item for list commands | `id`, `name` |
-| `ItemDetail` | Extended item for get commands | `id`, `name` |
-
-### Model Architecture
-
-```
-models/
-├── __init__.py      # Exports all models
-├── base.py          # CLIModel base class
-└── item.py          # Item, ItemDetail models
-```
-
-### Creating Custom Models
-
-1. Define your model in `models/`:
-
-```python
-from .base import CLIModel
-from typing import Optional
-from enum import Enum
-
-class MyStatus(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-
-class MyItem(CLIModel):
-    # Required fields - no default value
-    id: str
-    name: str
-
-    # Optional fields with defaults
-    status: MyStatus = MyStatus.ACTIVE
-    description: Optional[str] = None
-```
-
-2. Export from `models/__init__.py`
-3. Use factory function in `client.py` to return models
-
-### Read-Only Fields
-
-Pydantic supports read-only fields natively using `Field()` parameters:
-
-| Pattern | Effect |
-|---------|--------|
-| `Field(frozen=True)` | Immutable after model creation (raises error on assignment) |
-| `Field(exclude=True)` | Excluded from `model_dump()` output |
-| `Field(init=False)` | Excluded from `__init__` (requires default value) |
-
-```python
-from pydantic import Field
-from .base import CLIModel
-from typing import Optional
-
-class Item(CLIModel):
-    # Read-only: server-assigned, cannot be changed after creation
-    id: str = Field(frozen=True)
-
-    # Regular writable field
-    name: str
-
-    # Read-only timestamps: server-assigned, immutable
-    created_at: Optional[str] = Field(default=None, frozen=True)
-    updated_at: Optional[str] = Field(default=None, frozen=True)
-
-# Separate model for create payloads (no read-only fields)
-class ItemCreate(CLIModel):
-    name: str
-    description: Optional[str] = None
-```
-
-### Model Validation
-
-Models enforce required fields at runtime:
-
-```python
-# This will raise ValidationError - missing required 'name'
-item = Item(id="123")
-
-# This works - all required fields provided
-item = Item(id="123", name="My Item")
-```
 
 ## Requirements
 
 - Python 3.9+
-- Dependencies (installed automatically):
-  - typer
-  - python-dotenv
-  - requests
-  - pydantic
+- Claude Code CLI installed and authenticated
+- For notifications: `slack`, `google`, and/or `notifier` (for macOS desktop) CLIs
 
 ## License
 

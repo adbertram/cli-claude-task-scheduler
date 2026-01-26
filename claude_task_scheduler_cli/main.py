@@ -1,18 +1,22 @@
-"""Main entry point for ClaudeTaskScheduler CLI."""
-import typer
+"""Main entry point for Claude Task Scheduler CLI."""
+
 from typing import Optional
-from .client import ClientError
+
+import typer
 
 app = typer.Typer(
     name="claude-task-scheduler",
-    help="CLI interface for ClaudeTaskScheduler API",
-    add_completion=True,  # Enables --install-completion
+    help="Schedule and execute Claude Code prompts with auto-resume, notifications, and logging",
+    add_completion=True,
 )
 
 # Register command modules
-from .commands import auth, items
-app.add_typer(auth.app, name="auth", help="Manage ClaudeTaskScheduler API authentication")
-app.add_typer(items.app, name="items", help="Manage claude-task-scheduler items")
+from .commands import daemon, notification_channels, runs, tasks
+
+app.add_typer(tasks.app, name="tasks", help="Manage scheduled tasks")
+app.add_typer(runs.app, name="runs", help="Manage task runs")
+app.add_typer(daemon.app, name="daemon", help="Manage scheduler daemon")
+app.add_typer(notification_channels.app, name="channels", help="Manage notification channels")
 
 
 @app.callback(invoke_without_command=True)
@@ -22,10 +26,11 @@ def callback(
         None, "--version", "-v", help="Show version and exit", is_eager=True
     ),
 ):
-    """ClaudeTaskScheduler CLI - Manage ClaudeTaskScheduler from the command line."""
+    """Claude Task Scheduler - Schedule and execute Claude Code prompts."""
     if version:
         from . import __version__
-        typer.echo(f"claude-task-scheduler-cli version {__version__}")
+
+        typer.echo(f"claude-task-scheduler version {__version__}")
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
@@ -36,9 +41,6 @@ def main():
     """Main entry point."""
     try:
         app()
-    except ClientError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
     except KeyboardInterrupt:
         typer.echo("\nAborted!", err=True)
         raise typer.Exit(130)
