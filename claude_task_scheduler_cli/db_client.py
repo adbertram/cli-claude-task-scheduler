@@ -12,6 +12,7 @@ from .models.db import (
     MacosNotificationChannelDB,
     ScheduledTaskDB,
     SlackNotificationChannelDB,
+    TaskLogDB,
     TaskRunDB,
     get_engine,
     get_session,
@@ -19,6 +20,13 @@ from .models.db import (
     task_gmail_channels,
     task_macos_channels,
     task_slack_channels,
+)
+from .models.log import (
+    LogEventType,
+    LogLevel,
+    TaskLog,
+    TaskLogCreate,
+    TaskLogDetail,
 )
 from .models.notification import (
     GmailNotificationChannel,
@@ -143,8 +151,8 @@ class DatabaseClient:
         self,
         enabled_only: bool = False,
         limit: int = 100,
-    ) -> list[ScheduledTask]:
-        """List all tasks."""
+    ) -> list[ScheduledTaskDetail]:
+        """List all tasks with notification details."""
         session = self._get_session()
         try:
             query = session.query(ScheduledTaskDB)
@@ -152,7 +160,15 @@ class DatabaseClient:
                 query = query.filter_by(enabled=True)
             query = query.order_by(ScheduledTaskDB.created_at.desc()).limit(limit)
             tasks_db = query.all()
-            return [self._task_db_to_model(t) for t in tasks_db]
+
+            result = []
+            for task_db in tasks_db:
+                notif_db = session.query(NotificationConfigDB).filter_by(task_id=task_db.id).first()
+                slack_channels_db = task_db.slack_channels
+                gmail_channels_db = task_db.gmail_channels
+                macos_channels_db = task_db.macos_channels
+                result.append(self._task_db_to_detail(task_db, notif_db, slack_channels_db, gmail_channels_db, macos_channels_db))
+            return result
         finally:
             session.close()
 
@@ -361,6 +377,14 @@ class DatabaseClient:
         try:
             runs_db = session.query(TaskRunDB).filter_by(status=TaskStatus.RUNNING.value).all()
             return [self._run_db_to_model(r) for r in runs_db]
+        finally:
+            session.close()
+
+    def count_runs(self, task_id: str) -> int:
+        """Count total runs for a task."""
+        session = self._get_session()
+        try:
+            return session.query(TaskRunDB).filter_by(task_id=task_id).count()
         finally:
             session.close()
 
@@ -828,3 +852,209 @@ class DatabaseClient:
             return [self._macos_channel_db_to_model(ch) for ch in channels_db]
         finally:
             session.close()
+
+    # Log operations
+
+    def create_log(
+        self,
+        task_id: str,
+        event_type: LogEventType,
+        message: str,
+        level: LogLevel = LogLevel.INFO,
+        run_id: Optional[str] = None,
+        details: Optional[str] = None,
+    ) -> TaskLog:
+        """Create a new log entry.
+
+        Args:
+            task_id: ID of the task
+            event_type: Type of event being logged
+            message: Log message
+            level: Log severity level
+            run_id: Optional run ID if log is associated with a run
+            details: Optional full details (no truncation)
+
+        Returns:
+            Created TaskLog
+        """
+        session = self._get_session()
+        try:
+            log_id = str(uuid.uuid4())
+            now = datetime.utcnow()
+
+            log_db = TaskLogDB(
+                id=log_id,
+                task_id=task_id,
+                run_id=run_id,
+                event_type=event_type.value,
+                level=level.value,
+                message=message,
+                details=details,
+                created_at=now,
+            )
+            session.add(log_db)
+            session.commit()
+            session.refresh(log_db)
+
+            return self._log_db_to_model(log_db)
+        finally:
+            session.close()
+
+    def get_log(self, log_id: str) -> Optional[TaskLogDetail]:
+        """Get a log entry by ID with task and run details."""
+        session = self._get_session()
+        try:
+            log_db = session.query(TaskLogDB).filter_by(id=log_id).first()
+            if not log_db:
+                return None
+            task_db = session.query(ScheduledTaskDB).filter_by(id=log_db.task_id).first()
+            run_db = session.query(TaskRunDB).filter_by(id=log_db.run_id).first() if log_db.run_id else None
+            return self._log_db_to_detail(log_db, task_db, run_db)
+        finally:
+            session.close()
+
+    def list_logs(
+        self,
+        task_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+        event_type: Optional[LogEventType] = None,
+        level: Optional[LogLevel] = None,
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[TaskLog]:
+        """List logs with optional filters.
+
+        Args:
+            task_id: Filter by task ID
+            run_id: Filter by run ID
+            event_type: Filter by event type
+            level: Filter by minimum log level
+            since: Filter logs after this time
+            until: Filter logs before this time
+            limit: Maximum number of results
+            offset: Number of results to skip
+
+        Returns:
+            List of TaskLog entries
+        """
+        session = self._get_session()
+        try:
+            query = session.query(TaskLogDB)
+
+            if task_id:
+                query = query.filter_by(task_id=task_id)
+            if run_id:
+                query = query.filter_by(run_id=run_id)
+            if event_type:
+                query = query.filter_by(event_type=event_type.value)
+            if level:
+                # Filter by level and higher severity
+                level_order = ["debug", "info", "warning", "error"]
+                level_idx = level_order.index(level.value)
+                allowed_levels = level_order[level_idx:]
+                query = query.filter(TaskLogDB.level.in_(allowed_levels))
+            if since:
+                query = query.filter(TaskLogDB.created_at >= since)
+            if until:
+                query = query.filter(TaskLogDB.created_at <= until)
+
+            query = query.order_by(TaskLogDB.created_at.desc())
+            query = query.offset(offset).limit(limit)
+
+            logs_db = query.all()
+            return [self._log_db_to_model(log) for log in logs_db]
+        finally:
+            session.close()
+
+    def delete_logs(
+        self,
+        task_id: Optional[str] = None,
+        before: Optional[datetime] = None,
+    ) -> int:
+        """Delete logs matching the criteria.
+
+        Args:
+            task_id: Delete logs for this task only
+            before: Delete logs created before this time
+
+        Returns:
+            Number of logs deleted
+        """
+        session = self._get_session()
+        try:
+            query = session.query(TaskLogDB)
+
+            if task_id:
+                query = query.filter_by(task_id=task_id)
+            if before:
+                query = query.filter(TaskLogDB.created_at < before)
+
+            count = query.count()
+            query.delete(synchronize_session=False)
+            session.commit()
+
+            return count
+        finally:
+            session.close()
+
+    def count_logs(
+        self,
+        task_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+    ) -> int:
+        """Count logs matching the criteria.
+
+        Args:
+            task_id: Count logs for this task
+            run_id: Count logs for this run
+
+        Returns:
+            Number of logs
+        """
+        session = self._get_session()
+        try:
+            query = session.query(TaskLogDB)
+
+            if task_id:
+                query = query.filter_by(task_id=task_id)
+            if run_id:
+                query = query.filter_by(run_id=run_id)
+
+            return query.count()
+        finally:
+            session.close()
+
+    def _log_db_to_model(self, log_db: TaskLogDB) -> TaskLog:
+        """Convert DB log to Pydantic model."""
+        return TaskLog(
+            id=log_db.id,
+            task_id=log_db.task_id,
+            run_id=log_db.run_id,
+            event_type=LogEventType(log_db.event_type),
+            level=LogLevel(log_db.level),
+            message=log_db.message,
+            details=log_db.details,
+            created_at=log_db.created_at,
+        )
+
+    def _log_db_to_detail(
+        self,
+        log_db: TaskLogDB,
+        task_db: Optional[ScheduledTaskDB],
+        run_db: Optional[TaskRunDB],
+    ) -> TaskLogDetail:
+        """Convert DB log to detail model with task and run info."""
+        return TaskLogDetail(
+            id=log_db.id,
+            task_id=log_db.task_id,
+            run_id=log_db.run_id,
+            event_type=LogEventType(log_db.event_type),
+            level=LogLevel(log_db.level),
+            message=log_db.message,
+            details=log_db.details,
+            created_at=log_db.created_at,
+            task_name=task_db.name if task_db else None,
+            run_attempt=run_db.attempt_number if run_db else None,
+        )

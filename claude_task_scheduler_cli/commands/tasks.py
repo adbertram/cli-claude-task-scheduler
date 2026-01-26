@@ -5,17 +5,81 @@ from typing import Optional
 import typer
 
 from ..db_client import DatabaseClient
+from ..health import check_daemon_health
 from ..models.task import (
     NotificationEvent,
     ScheduledTaskCreate,
     ScheduledTaskUpdate,
 )
-from ..output import print_error, print_json, print_success, print_table
+from ..output import print_error, print_json, print_success, print_table, print_warning
 from ..scheduler import SchedulerService
 
 app = typer.Typer(help="Manage scheduled tasks", no_args_is_help=True)
 
 VALID_CHANNEL_TYPES = {"slack", "gmail", "macos"}
+
+
+def _format_hour(hour: int) -> str:
+    """Format hour as 12-hour time with AM/PM."""
+    if hour == 0:
+        return "12AM"
+    elif hour < 12:
+        return f"{hour}AM"
+    elif hour == 12:
+        return "12PM"
+    else:
+        return f"{hour - 12}PM"
+
+
+def _cron_to_friendly(cron: str) -> str:
+    """Convert cron expression to human-readable format."""
+    parts = cron.split()
+    if len(parts) != 5:
+        return cron
+
+    minute, hour, dom, month, dow = parts
+
+    # Every minute
+    if cron == "* * * * *":
+        return "every minute"
+
+    # Every N minutes
+    if minute.startswith("*/") and hour == "*" and dom == "*" and month == "*" and dow == "*":
+        interval = minute[2:]
+        return f"every {interval} min"
+
+    # Hourly at specific minute
+    if minute.isdigit() and hour == "*" and dom == "*" and month == "*" and dow == "*":
+        m = int(minute)
+        if m == 0:
+            return "hourly"
+        return f"hourly @:{minute.zfill(2)}"
+
+    # Daily at specific time
+    if minute.isdigit() and hour.isdigit() and dom == "*" and month == "*" and dow == "*":
+        return f"daily @{_format_hour(int(hour))}"
+
+    # Weekly (specific day of week)
+    if minute.isdigit() and hour.isdigit() and dom == "*" and month == "*" and dow.isdigit():
+        days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        day_idx = int(dow)
+        if 0 <= day_idx <= 6:
+            return f"{days[day_idx]} @{_format_hour(int(hour))}"
+
+    # Monthly (specific day of month)
+    if minute.isdigit() and hour.isdigit() and dom.isdigit() and month == "*" and dow == "*":
+        d = int(dom)
+        suffix = "th"
+        if d == 1 or d == 21 or d == 31:
+            suffix = "st"
+        elif d == 2 or d == 22:
+            suffix = "nd"
+        elif d == 3 or d == 23:
+            suffix = "rd"
+        return f"monthly {d}{suffix} @{_format_hour(int(hour))}"
+
+    # Fallback to original cron
+    return cron
 
 
 def _get_db_client() -> DatabaseClient:
@@ -135,6 +199,14 @@ def create_task(
 
     print_success(f"Task '{name}' created successfully")
 
+    # Check daemon health and warn if not running
+    health = check_daemon_health()
+    if not health.get("running"):
+        print_warning(
+            "Daemon is not running. Task will not execute until daemon is started.\n"
+            "Run: claude-task-scheduler daemon start"
+        )
+
 
 @app.command("list")
 def list_tasks(
@@ -150,20 +222,37 @@ def list_tasks(
 
     tasks = db_client.list_tasks(enabled_only=enabled_only, limit=limit)
 
-    # Add next run time to each task
+    # Build output with notification channels summary
+    output = []
     for task in tasks:
         if task.enabled:
             next_run = scheduler.get_next_run_time(task.cron_expression)
             task.next_run_at = next_run
 
+        # Build notification channels summary
+        channels = []
+        if task.notification_config:
+            if task.notification_config.slack_channels:
+                channels.append("slack")
+            if task.notification_config.gmail_channels:
+                channels.append("gmail")
+            if task.notification_config.macos_channels:
+                channels.append("macos")
+
+        task_dict = task.model_dump()
+        task_dict["notification_channels"] = ", ".join(channels) if channels else "none"
+        task_dict["schedule_friendly"] = _cron_to_friendly(task.cron_expression)
+        task_dict["total_runs"] = db_client.count_runs(task.id)
+        output.append(task_dict)
+
     if table:
         print_table(
-            tasks,
-            ["id", "name", "cron_expression", "model", "enabled", "next_run_at"],
-            ["ID", "Name", "Schedule", "Model", "Enabled", "Next Run"],
+            output,
+            ["name", "schedule_friendly", "model", "enabled", "notification_channels", "total_runs"],
+            ["Name", "Schedule", "Model", "Enabled", "Notifications", "Runs"],
         )
     else:
-        print_json(tasks)
+        print_json(output)
 
 
 @app.command("get")

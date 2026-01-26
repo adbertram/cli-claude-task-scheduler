@@ -60,6 +60,7 @@ class ScheduledTaskDB(Base):
 
     # Relationships
     runs = relationship("TaskRunDB", back_populates="task", cascade="all, delete-orphan")
+    logs = relationship("TaskLogDB", back_populates="task", cascade="all, delete-orphan")
     notification_config = relationship(
         "NotificationConfigDB",
         back_populates="task",
@@ -101,6 +102,7 @@ class TaskRunDB(Base):
 
     # Relationships
     task = relationship("ScheduledTaskDB", back_populates="runs")
+    logs = relationship("TaskLogDB", back_populates="run", cascade="all, delete-orphan")
 
 
 class NotificationConfigDB(Base):
@@ -185,6 +187,25 @@ class MacosNotificationChannelDB(Base):
         secondary=task_macos_channels,
         back_populates="macos_channels",
     )
+
+
+class TaskLogDB(Base):
+    """Database model for task activity logs."""
+
+    __tablename__ = "task_logs"
+
+    id = Column(String, primary_key=True)
+    task_id = Column(String, ForeignKey("scheduled_tasks.id"), nullable=False)
+    run_id = Column(String, ForeignKey("task_runs.id"), nullable=True)
+    event_type = Column(String, nullable=False)
+    level = Column(String, nullable=False, default="info")
+    message = Column(String, nullable=False)
+    details = Column(Text, nullable=True)  # Full output, no truncation
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    task = relationship("ScheduledTaskDB", back_populates="logs")
+    run = relationship("TaskRunDB", back_populates="logs")
 
 
 def get_engine(db_path: str = None):

@@ -11,10 +11,11 @@ app = typer.Typer(
 )
 
 # Register command modules
-from .commands import daemon, notification_channels, runs, tasks
+from .commands import daemon, logs, notification_channels, runs, tasks
 
 app.add_typer(tasks.app, name="tasks", help="Manage scheduled tasks")
 app.add_typer(runs.app, name="runs", help="Manage task runs")
+app.add_typer(logs.app, name="logs", help="View and manage task activity logs")
 app.add_typer(daemon.app, name="daemon", help="Manage scheduler daemon")
 app.add_typer(notification_channels.app, name="channels", help="Manage notification channels")
 
