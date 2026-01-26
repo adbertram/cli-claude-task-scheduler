@@ -248,8 +248,8 @@ def list_tasks(
     if table:
         print_table(
             output,
-            ["name", "schedule_friendly", "model", "enabled", "notification_channels", "total_runs"],
-            ["Name", "Schedule", "Model", "Enabled", "Notifications", "Runs"],
+            ["id", "name", "schedule_friendly", "model", "enabled", "notification_channels", "total_runs"],
+            ["ID", "Name", "Schedule", "Model", "Enabled", "Notifications", "Runs"],
         )
     else:
         print_json(output)
