@@ -65,7 +65,7 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
 
         # Update run with results
         status = TaskStatus.COMPLETED if result["exit_code"] == 0 else TaskStatus.FAILED
-        run = db_client.update_run(
+        db_client.update_run(
             run.id,
             status=status,
             session_id=result.get("session_id"),
@@ -74,6 +74,11 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
             summary=result.get("summary"),
             completed_at=datetime.utcnow(),
         )
+        # Update local run object for logging/notifications
+        run.status = status
+        run.exit_code = result["exit_code"]
+        run.error_message = result.get("error")
+        run.summary = result.get("summary")
 
         # Log completion or failure
         if status == TaskStatus.COMPLETED:
@@ -102,12 +107,15 @@ def execute_scheduled_task(task_id: str, db_path: str, attempt_number: int = 1) 
 
     except Exception as e:
         # Update run with error
-        run = db_client.update_run(
+        db_client.update_run(
             run.id,
             status=TaskStatus.FAILED,
             error_message=str(e),
             completed_at=datetime.utcnow(),
         )
+        # Update local run object for logging/notifications
+        run.status = TaskStatus.FAILED
+        run.error_message = str(e)
 
         # Log failure
         logger_service.log_task_failed(task, run, error=str(e))
