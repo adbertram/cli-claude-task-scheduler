@@ -555,8 +555,6 @@ class SchedulerService:
                     health = {
                         "running": True,
                         "uptime_seconds": int(uptime) if uptime else 0,
-                        "job_count": scheduler_service.get_job_count(),
-                        "pid": os.getpid(),
                     }
                     response = json.dumps(health).encode()
                     self.send_response(200)

@@ -23,7 +23,7 @@ def check_daemon_health() -> dict:
 
     Returns:
         Dict with health status:
-        - If running: {"running": True, "uptime_seconds": ..., "job_count": ..., "pid": ...}
+        - If running: {"running": True, "uptime_seconds": ...}
         - If not running: {"running": False, "reason": "..."}
     """
     socket_path = get_socket_path()

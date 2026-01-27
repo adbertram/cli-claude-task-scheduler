@@ -139,21 +139,21 @@ def start(
             print_success("Scheduler stopped")
 
 
-def healthcheck(
+def status(
     table: bool = typer.Option(False, "--table", "-t", help="Display as table"),
 ):
-    """Check if the scheduler daemon is running and healthy.
+    """Check if the scheduler daemon is running.
 
     Connects to the daemon's Unix socket to verify it's running.
-    Returns exit code 0 if healthy, 1 if not running.
+    Returns exit code 0 if running, 1 if not running.
     """
     health = check_daemon_health()
 
     if table:
         print_table(
             [health],
-            ["running", "uptime_seconds", "job_count", "pid", "reason"],
-            ["Running", "Uptime (s)", "Jobs", "PID", "Reason"],
+            ["running", "uptime_seconds", "reason"],
+            ["Running", "Uptime (s)", "Reason"],
         )
     else:
         print_json(health)
