@@ -53,6 +53,7 @@ class ScheduledTaskDB(Base):
     project_path = Column(String, nullable=False)
     cron_expression = Column(String, nullable=True)  # Optional - tasks without schedule can be triggered manually
     model = Column(String, nullable=False)
+    summary_model = Column(String, nullable=False, default="opus")
     max_retries = Column(Integer, default=3)
     timeout_seconds = Column(Integer, default=3600)
     enabled = Column(Boolean, default=True)
@@ -102,6 +103,7 @@ class TaskRunDB(Base):
     attempt_number = Column(Integer, default=1)
     task_outcome = Column(String, nullable=False, default="unknown")  # success, failed, unknown
     task_outcome_reason = Column(Text, nullable=True)
+    run_summary = Column(Text, nullable=True)
 
     # Relationships
     task = relationship("ScheduledTaskDB", back_populates="runs")
@@ -265,6 +267,26 @@ def _run_migrations(engine):
             with engine.connect() as conn:
                 conn.execute(text(
                     "ALTER TABLE task_runs ADD COLUMN task_outcome_reason TEXT"
+                ))
+                conn.commit()
+
+        # Add run_summary column if missing
+        if "run_summary" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE task_runs ADD COLUMN run_summary TEXT"
+                ))
+                conn.commit()
+
+    # Check if scheduled_tasks table exists
+    if "scheduled_tasks" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("scheduled_tasks")}
+
+        # Add summary_model column if missing
+        if "summary_model" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE scheduled_tasks ADD COLUMN summary_model VARCHAR DEFAULT 'opus' NOT NULL"
                 ))
                 conn.commit()
 

@@ -179,6 +179,10 @@ def execute_scheduled_task(
         # Handle retry on failure or timeout
         if status in (RunStatus.FAILURE, RunStatus.TIMEOUT) and attempt_number < task.max_retries:
             _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
+        else:
+            # Final attempt (success, or failure/timeout with no retries left) - generate summary
+            from .summary import spawn_summary_generation
+            spawn_summary_generation(run.id, task, db_path)
 
     except Exception as e:
         # Update run with error
@@ -207,6 +211,10 @@ def execute_scheduled_task(
         # Handle retry
         if attempt_number < task.max_retries:
             _schedule_retry_standalone(task_id, db_path, attempt_number + 1, task, run, logger_service)
+        else:
+            # Final attempt (no retries left) - generate summary
+            from .summary import spawn_summary_generation
+            spawn_summary_generation(run.id, task, db_path)
 
     # Return prettified run from database
     return db_client.get_run(run.id)

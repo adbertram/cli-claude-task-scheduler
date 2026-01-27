@@ -82,6 +82,7 @@ class ScheduledTask(CLIModel):
     project_path: str
     cron_expression: Optional[str] = None
     model: str
+    summary_model: str = "opus"
     max_retries: int = 3
     timeout_seconds: int = 3600
     enabled: bool = True
@@ -160,6 +161,7 @@ class ScheduledTaskCreate(CLIModel):
     project_path: str
     cron_expression: Optional[str] = None
     model: str
+    summary_model: str = "opus"
     max_retries: int = 3
     timeout_seconds: int = 3600
     enabled: bool = True
@@ -184,6 +186,7 @@ class ScheduledTaskUpdate(CLIModel):
     project_path: Optional[str] = None
     cron_expression: Optional[str] = None
     model: Optional[str] = None
+    summary_model: Optional[str] = None
     max_retries: Optional[int] = None
     timeout_seconds: Optional[int] = None
     enabled: Optional[bool] = None
@@ -208,6 +211,7 @@ class TaskRun(CLIModel):
     attempt_number: int = 1
     task_outcome: TaskOutcome = TaskOutcome.UNKNOWN
     task_outcome_reason: Optional[str] = None
+    run_summary: Optional[str] = None
 
 
 class TaskRunDetail(TaskRun):

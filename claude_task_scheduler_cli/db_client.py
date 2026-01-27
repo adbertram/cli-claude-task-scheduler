@@ -86,6 +86,7 @@ class DatabaseClient:
                 project_path=data.project_path,
                 cron_expression=data.cron_expression,
                 model=data.model,
+                summary_model=data.summary_model,
                 max_retries=data.max_retries,
                 timeout_seconds=data.timeout_seconds,
                 enabled=data.enabled,
@@ -350,6 +351,7 @@ class DatabaseClient:
         completed_at: Optional[datetime] = None,
         task_outcome: Optional[TaskOutcome] = None,
         task_outcome_reason: Optional[str] = None,
+        run_summary: Optional[str] = None,
     ) -> Optional[TaskRun]:
         """Update a run."""
         session = self._get_session()
@@ -374,6 +376,8 @@ class DatabaseClient:
                 run_db.task_outcome = task_outcome.value
             if task_outcome_reason is not None:
                 run_db.task_outcome_reason = task_outcome_reason
+            if run_summary is not None:
+                run_db.run_summary = run_summary
 
             session.commit()
             session.refresh(run_db)
@@ -428,6 +432,7 @@ class DatabaseClient:
             project_path=task_db.project_path,
             cron_expression=task_db.cron_expression,
             model=task_db.model,
+            summary_model=task_db.summary_model,
             max_retries=task_db.max_retries,
             timeout_seconds=task_db.timeout_seconds,
             enabled=task_db.enabled,
@@ -455,6 +460,7 @@ class DatabaseClient:
             project_path=task_db.project_path,
             cron_expression=task_db.cron_expression,
             model=task_db.model,
+            summary_model=task_db.summary_model,
             max_retries=task_db.max_retries,
             timeout_seconds=task_db.timeout_seconds,
             enabled=task_db.enabled,
@@ -485,6 +491,7 @@ class DatabaseClient:
             attempt_number=run_db.attempt_number,
             task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
             task_outcome_reason=run_db.task_outcome_reason,
+            run_summary=run_db.run_summary,
         )
 
     def _run_db_to_detail(
@@ -506,6 +513,7 @@ class DatabaseClient:
             attempt_number=run_db.attempt_number,
             task_outcome=TaskOutcome(run_db.task_outcome) if run_db.task_outcome else TaskOutcome.UNKNOWN,
             task_outcome_reason=run_db.task_outcome_reason,
+            run_summary=run_db.run_summary,
             task_name=task_db.name if task_db else None,
         )
 
