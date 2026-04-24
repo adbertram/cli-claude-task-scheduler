@@ -1,14 +1,2 @@
-__pycache__/
-*.py[cod]
-venv/
-.venv/
-.env
-*.egg-info/
-dist/
-build/
-.DS_Store
-
-# Claude Code workspaces
 plans/
-agent_workspaces/
-_temp/
+tasks/
